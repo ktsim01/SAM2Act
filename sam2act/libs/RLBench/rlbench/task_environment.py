@@ -60,10 +60,10 @@ class TaskEnvironment(object):
         return self._variation_number
 
     def set_variation(self, v: int) -> None:
-        if v >= self.variation_count():
-            raise TaskEnvironmentError(
-                'Requested variation %d, but there are only %d variations.' % (
-                    v, self.variation_count()))
+        # if v >= self.variation_count():
+        #     raise TaskEnvironmentError(
+        #         'Requested variation %d, but there are only %d variations.' % (
+        #             v, self.variation_count()))
         self._variation_number = v
 
     def variation_count(self) -> int:

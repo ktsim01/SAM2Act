@@ -9,6 +9,7 @@ import pickle
 import logging
 import numpy as np
 from typing import List
+import open3d as o3d
 
 import clip
 import peract_colab.arm.utils as utils
@@ -24,6 +25,8 @@ from rlbench.demo import Demo
 from sam2act.utils.peract_utils import LOW_DIM_SIZE, IMAGE_SIZE, CAMERAS
 from sam2act.libs.peract.helpers.demo_loading_utils import keypoint_discovery
 from sam2act.libs.peract.helpers.utils import extract_obs
+from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_batch, rotation_transfer_matrix_to_6D, \
+                          get_4_points_from_gripper_pos_orient
 
 
 def create_replay(
@@ -343,6 +346,50 @@ def _clip_encode_text(clip_model, text):
 
     return x, emb
 
+# add individual data points to a replay
+def _create_articubot_dataset(
+    obs, episode_num, sample_frame, key_frame_obs, action
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
+    
+    
+    front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+
+    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+
+    all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    np_points = all_pcd[rand_indx]
+    np_rgb = all_rgb[rand_indx]    
+
+    obj_pcd = o3d.geometry.PointCloud()
+    obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+
+    sampled_pcd = obj_pcd.farthest_point_down_sample(4500)
+
+    sampled_pcd = np.asarray(sampled_pcd.points)
+
+    data = {'point_cloud': np.expand_dims(sampled_pcd, axis=0), 
+            'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+            'state': obs.get_low_dim_data()}
+    
+    if not os.path.exists('put_item_in_drawer_articubot/' + folder_name):
+        os.makedirs('put_item_in_drawer_articubot/' + folder_name)
+    
+    with open('put_item_in_drawer_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
+        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
+        pickle.dump(data, f)
 
 # add individual data points to a replay
 def _add_keypoints_to_replay(
@@ -476,18 +523,18 @@ def fill_replay(
 ):
 
     disk_exist = False
-    if replay._disk_saving:
-        if os.path.exists(task_replay_storage_folder):
-            print(
-                "[Info] Replay dataset already exists in the disk: {}".format(
-                    task_replay_storage_folder
-                ),
-                flush=True,
-            )
-            disk_exist = True
-        else:
-            logging.info("\t saving to disk: %s", task_replay_storage_folder)
-            os.makedirs(task_replay_storage_folder, exist_ok=True)
+    # if replay._disk_saving:
+    #     if os.path.exists(task_replay_storage_folder):
+    #         print(
+    #             "[Info] Replay dataset already exists in the disk: {}".format(
+    #                 task_replay_storage_folder
+    #             ),
+    #             flush=True,
+    #         )
+    #         disk_exist = True
+    #     else:
+    #         logging.info("\t saving to disk: %s", task_replay_storage_folder)
+    #         os.makedirs(task_replay_storage_folder, exist_ok=True)
 
     if disk_exist:
         replay.recover_from_disk(task, task_replay_storage_folder)
@@ -508,57 +555,80 @@ def fill_replay(
             episode_keypoints = keypoint_discovery(demo)  # list of keypoint   [id0, id1, id2]
             next_keypoint_idx = 0
             for i in range(len(demo) - 1):
-                if not demo_augmentation and i > 0:
-                    break
-                if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
-                    continue
+                # if not demo_augmentation and i > 0:
+                #     break
+                # if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
+                #     continue
 
                 obs = demo[i]
-                desc = descs[0]
-                # if our starting point is past one of the keypoints, then remove it
-                while (
-                    next_keypoint_idx < len(episode_keypoints)
-                    and i >= episode_keypoints[next_keypoint_idx]
-                ):
-                    next_keypoint_idx += 1
-                if next_keypoint_idx == len(episode_keypoints):
-                    break
-                _add_keypoints_to_replay(
-                    replay,
-                    task,
-                    task_replay_storage_folder,
-                    d_idx,
-                    i,
-                    obs,
-                    demo,
-                    episode_keypoints,
-                    cameras,
+                next_keypoint_idx = 0
+                key_frame_obs = demo[episode_keypoints[next_keypoint_idx]]
+                if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints):
+                    next_keypoint_idx = next_keypoint_idx + 1
+
+                obs_tp1 = demo[i]    # keypoint frame
+                obs_tm1 = demo[max(0, i - 1)]   # frame before keypoint
+                (
+                    trans_indicies,
+                    rot_grip_indicies,
+                    ignore_collisions,
+                    action,
+                    attention_coordinates,
+                ) = _get_action(         #  get keypoint action 
+                    obs_tp1,
+                    obs_tm1,
                     rlbench_scene_bounds,
                     voxel_sizes,
                     rotation_resolution,
                     crop_augmentation,
-                    next_keypoint_idx=next_keypoint_idx,
-                    description=desc,
-                    clip_model=clip_model,
-                    device=device,
                 )
+                            
+                _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action)
+                desc = descs[0]
+                # if our starting point is past one of the keypoints, then remove it
+                # while (
+                #     next_keypoint_idx < len(episode_keypoints)
+                #     and i >= episode_keypoints[next_keypoint_idx]
+                # ):
+                #     next_keypoint_idx += 1
+                # if next_keypoint_idx == len(episode_keypoints):
+                #     break
+                # _create_articubot_dataset(
+                #     replay,
+                #     task,
+                #     task_replay_storage_folder,
+                #     d_idx,
+                #     i,
+                #     obs,
+                #     demo,
+                #     episode_keypoints,
+                #     cameras,
+                #     rlbench_scene_bounds,
+                #     voxel_sizes,
+                #     rotation_resolution,
+                #     crop_augmentation,
+                #     next_keypoint_idx=next_keypoint_idx,
+                #     description=desc,
+                #     clip_model=clip_model,
+                #     device=device,
+                # )
 
         # save TERMINAL info in replay_info.npy
-        task_idx = replay._task_index[task]
-        with open(
-            os.path.join(task_replay_storage_folder, "replay_info.npy"), "wb"
-        ) as fp:
-            np.save(
-                fp,
-                replay._store["terminal"][
-                    replay._task_replay_start_index[
-                        task_idx
-                    ] : replay._task_replay_start_index[task_idx]
-                    + replay._task_add_count[task_idx].value
-                ],
-            )
+        # task_idx = replay._task_index[task]
+        # with open(
+        #     os.path.join(task_replay_storage_folder, "replay_info.npy"), "wb"
+        # ) as fp:
+        #     np.save(
+        #         fp,
+        #         replay._store["terminal"][
+        #             replay._task_replay_start_index[
+        #                 task_idx
+        #             ] : replay._task_replay_start_index[task_idx]
+        #             + replay._task_add_count[task_idx].value
+        #         ],
+        #     )
 
-        print("Replay filled with demos.")
+        # print("Replay filled with demos.")
 
 
 
@@ -710,7 +780,6 @@ def fill_replay_temporal(
         else:
             logging.info("\t saving to disk: %s", task_replay_storage_folder)
             os.makedirs(task_replay_storage_folder, exist_ok=True)
-
     if disk_exist:
         replay.recover_from_disk(task, task_replay_storage_folder)
     else:
@@ -766,19 +835,19 @@ def fill_replay_temporal(
                 )
 
         # save TERMINAL info in replay_info.npy
-        task_idx = replay._task_index[task]
-        with open(
-            os.path.join(task_replay_storage_folder, "replay_info.npy"), "wb"
-        ) as fp:
-            np.save(
-                fp,
-                replay._store["terminal"][
-                    replay._task_replay_start_index[
-                        task_idx
-                    ] : replay._task_replay_start_index[task_idx]
-                    + replay._task_add_count[task_idx].value
-                ],
-            )
+        # task_idx = replay._task_index[task]
+        # with open(
+        #     os.path.join(task_replay_storage_folder, "replay_info.npy"), "wb"
+        # ) as fp:
+        #     np.save(
+        #         fp,
+        #         replay._store["terminal"][
+        #             replay._task_replay_start_index[
+        #                 task_idx
+        #             ] : replay._task_replay_start_index[task_idx]
+        #             + replay._task_add_count[task_idx].value
+        #         ],
+        #     )
 
-        print("Replay filled with demos.")
+        # print("Replay filled with demos.")
 
