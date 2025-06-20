@@ -109,6 +109,11 @@ One recommended version that is compatible with the rest of the library can be i
 ```
 FORCE_CUDA=1 pip install 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
 ```
+or
+
+```
+conda pytorch-cuda=11.8 -c pytorch -c nvidia
+```
 
 - **Step 4:** Install CoppeliaSim. PyRep requires version **4.1** of CoppeliaSim. Download and unzip CoppeliaSim: 
 - [Ubuntu 16.04](https://downloads.coppeliarobotics.com/V4_1_0/CoppeliaSim_Player_V4_1_0_Ubuntu16_04.tar.xz)
