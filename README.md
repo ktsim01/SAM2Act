@@ -112,7 +112,7 @@ FORCE_CUDA=1 pip install 'git+https://github.com/facebookresearch/pytorch3d.git@
 or
 
 ```
-conda pytorch-cuda=11.8 -c pytorch -c nvidia
+pip install pytorch3d==0.7.8
 ```
 
 - **Step 4:** Install CoppeliaSim. PyRep requires version **4.1** of CoppeliaSim. Download and unzip CoppeliaSim: 
