@@ -155,7 +155,7 @@ class VisionSensor(Object):
     def pointcloud_from_depth_and_camera_params(
             depth: np.ndarray, extrinsics: np.ndarray,
             intrinsics: np.ndarray) -> np.ndarray:
-        """Converts depth (in meters) to point cloud in word frame.
+        """Converts depth (in meters) to point cloud in world frame.
         :return: A numpy array of size (width, height, 3)
         """
         upc = _create_uniform_pixel_coords_image(depth.shape)

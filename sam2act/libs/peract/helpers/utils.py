@@ -10,9 +10,9 @@ from rlbench import CameraConfig, ObservationConfig
 from pyrep.const import RenderMode
 from typing import List
 
+
 REMOVE_KEYS = ['joint_velocities', 'joint_positions', 'joint_forces',
-               'gripper_open', 'gripper_pose',
-               'gripper_joint_positions', 'gripper_touch_forces',
+               'gripper_open', 'gripper_joint_positions', 'gripper_touch_forces',
                'task_low_dim_state', 'misc']
 
 SCALE_FACTOR = DEPTH_SCALE
@@ -336,7 +336,6 @@ def extract_obs(obs: Observation,
     if obs.gripper_joint_positions is not None:
         obs.gripper_joint_positions = np.clip(
             obs.gripper_joint_positions, 0., 0.04)
-
     obs_dict = vars(obs)
     obs_dict = {k: v for k, v in obs_dict.items() if v is not None}
     robot_state = np.array([

@@ -859,7 +859,7 @@ class MVT_SAM2_Single(nn.Module):
                 # translation decoder
                 trans = self.trans_decoder(u).view(bs, self.num_img, 1, h, w)
 
-        # if train with memory, and this is corase branch
+        # if train with memory, and this is coarse branch
         else:
 
             self.vision_feats_all = [x.permute(2, 3, 0, 1).reshape(-1, *x.permute(2, 3, 0, 1).shape[2:]).clone()]

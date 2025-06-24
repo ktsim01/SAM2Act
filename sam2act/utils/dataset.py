@@ -377,9 +377,11 @@ def _create_articubot_dataset(
 
     sampled_pcd = obj_pcd.farthest_point_down_sample(4500)
 
-    sampled_pcd = np.asarray(sampled_pcd.points)
+    sampled_points = np.asarray(sampled_pcd.points)
+    sampled_rgb = np.asarray(sampled_pcd.colors)
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
 
-    data = {'point_cloud': np.expand_dims(sampled_pcd, axis=0), 
+    data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
             'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
             'state': obs.get_low_dim_data()}
@@ -559,9 +561,8 @@ def fill_replay(
                 #     break
                 # if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
                 #     continue
-
+                print(episode_keypoints[next_keypoint_idx])
                 obs = demo[i]
-                next_keypoint_idx = 0
                 key_frame_obs = demo[episode_keypoints[next_keypoint_idx]]
                 if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints):
                     next_keypoint_idx = next_keypoint_idx + 1
