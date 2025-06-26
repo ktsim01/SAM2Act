@@ -129,23 +129,23 @@ def train(args):
     if os.environ['LOCAL_RANK'] == '0':
         if not os.path.exists(args.exp_path):
             os.makedirs(args.exp_path)
-        # wandb_run = wandb.init(
-        #         project=f"pointnet-weighted-displacement_{args.num_train_objects}",
-        #         name=str(output_dir),
-        #         dir=str(args.exp_path),
-        #     )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": args.exp_path,
-        #         "model_type": args.model_type,
-        #         "lr": args.lr,
-        #         "weight_loss_weight": args.weight_loss_weight,
-        #         "batch_size": args.batch_size
-        #     }
-        # )
+        wandb_run = wandb.init(
+                project=f"pointnet-weighted-displacement_{args.num_train_objects}",
+                name=str(output_dir),
+                dir=str(args.exp_path),
+            )
+        wandb.config.update(
+            {
+                "output_dir": args.exp_path,
+                "model_type": args.model_type,
+                "lr": args.lr,
+                "weight_loss_weight": args.weight_loss_weight,
+                "batch_size": args.batch_size
+            }
+        )
         
         config_dict = args.__dict__
-        # wandb.config.update(config_dict)
+        wandb.config.update(config_dict)
 
         # save the config file
         with open(os.path.join(args.exp_path, "config.txt"), "w") as f:
@@ -162,7 +162,7 @@ def train(args):
                 shuffle=False,
                 sampler=DistributedSampler(dataset),
                 batch_size=args.batch_size,
-                num_workers=0,
+                num_workers=2,
                 pin_memory=True,
                 )
 
@@ -261,12 +261,12 @@ def train(args):
                 collision = (collision * weights).sum(dim=1)
 
                 loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
-                loss = loss + loss_gripper.item()
-                accumulated_gripper_loss += loss_gripper.item()
+                loss = loss + loss_gripper * args.weight_loss_weight
+                accumulated_gripper_loss += (loss_gripper * args.weight_loss_weight).item()
 
                 loss_collision = bce_loss(collision, collision_gt.to(device))
-                loss = loss + loss_collision.item()
-                accumulated_collision_loss += loss_collision.item()
+                loss = loss + loss_collision * args.weight_loss_weight
+                accumulated_collision_loss += (loss_collision * args.weight_loss_weight).item()
     
             loss.backward()
             optimizer.step()
@@ -286,7 +286,7 @@ def train(args):
 
                 }
 
-                # wandb_run.log(log_info, step=global_step)
+                wandb_run.log(log_info, step=global_step)
 
                 running_loss = 0.0
                 accumulated_displacement_loss = 0.0
