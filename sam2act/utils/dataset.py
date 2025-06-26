@@ -324,7 +324,7 @@ def _get_action(
         trans_indicies,
         rot_and_grip_indicies,
         ignore_collisions,
-        np.concatenate([obs_tp1.gripper_pose, np.array([grip])]),
+        np.concatenate([obs_tp1.gripper_pose, np.array([grip]), np.array([ignore_collisions])]),
         attention_coordinates,
     )
 
@@ -386,10 +386,10 @@ def _create_articubot_dataset(
             'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
             'state': obs.get_low_dim_data()}
     
-    if not os.path.exists('put_item_in_drawer_articubot/' + folder_name):
-        os.makedirs('put_item_in_drawer_articubot/' + folder_name)
+    if not os.path.exists('data/put_money_in_safe_articubot/' + folder_name):
+        os.makedirs('data/put_money_in_safe_articubot/' + folder_name)
     
-    with open('put_item_in_drawer_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
+    with open('data/put_money_in_safe_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
         print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
         pickle.dump(data, f)
 

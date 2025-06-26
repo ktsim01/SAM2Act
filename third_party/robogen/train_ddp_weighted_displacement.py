@@ -11,6 +11,9 @@ from third_party.robogen.test_PointNet2.dataset_from_disk import get_dataset_fro
 import wandb
 from termcolor import cprint
 
+import sys
+sys.path.append('..')
+
 def ddp_setup():
     os.environ["NCCL_P2P_LEVEL"] = "NVL"
     init_process_group(backend="nccl", timeout=datetime.timedelta(seconds=5400))
@@ -21,9 +24,9 @@ def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
 
-    input_channel = 5 if args.add_one_hot_encoding else 3
+    input_channel = 6 if args.use_color else 3
 
-    if not args.predict_two_goals: output_dim = 13 
+    if not args.predict_two_goals: output_dim = 15 # 4 gripper points, 3 coordinates each, weights, gripper, and collision
     else: output_dim = 25
 
     if args.model_invariant:
@@ -66,6 +69,7 @@ def train(args):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.MSELoss()
+    bce_loss = torch.nn.BCEWithLogitsLoss()
 
     # dataloader = get_dataloader(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
     # dataloader = get_dataloader_from_pickle(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
@@ -104,6 +108,15 @@ def train(args):
     
     if not args.using_weight:
         output_dir = output_dir + "_no_weight"
+
+    if args.use_gripper_open:
+        output_dir = output_dir + "_use_gripper_open"
+
+    if args.use_collision:
+        output_dir = output_dir + "_use_collision"
+
+    if args.use_color:
+        output_dir = output_dir + "_use_color"
         
     output_dir += args.exp_name
     
@@ -116,23 +129,23 @@ def train(args):
     if os.environ['LOCAL_RANK'] == '0':
         if not os.path.exists(args.exp_path):
             os.makedirs(args.exp_path)
-        wandb_run = wandb.init(
-                project=f"pointnet-weighted-displacement_{args.num_train_objects}",
-                name=str(output_dir),
-                dir=str(args.exp_path),
-            )
-        wandb.config.update(
-            {
-                "output_dir": args.exp_path,
-                "model_type": args.model_type,
-                "lr": args.lr,
-                "weight_loss_weight": args.weight_loss_weight,
-                "batch_size": args.batch_size
-            }
-        )
+        # wandb_run = wandb.init(
+        #         project=f"pointnet-weighted-displacement_{args.num_train_objects}",
+        #         name=str(output_dir),
+        #         dir=str(args.exp_path),
+        #     )
+        # wandb.config.update(
+        #     {
+        #         "output_dir": args.exp_path,
+        #         "model_type": args.model_type,
+        #         "lr": args.lr,
+        #         "weight_loss_weight": args.weight_loss_weight,
+        #         "batch_size": args.batch_size
+        #     }
+        # )
         
         config_dict = args.__dict__
-        wandb.config.update(config_dict)
+        # wandb.config.update(config_dict)
 
         # save the config file
         with open(os.path.join(args.exp_path, "config.txt"), "w") as f:
@@ -149,7 +162,7 @@ def train(args):
                 shuffle=False,
                 sampler=DistributedSampler(dataset),
                 batch_size=args.batch_size,
-                num_workers=4,
+                num_workers=0,
                 pin_memory=True,
                 )
 
@@ -159,19 +172,26 @@ def train(args):
         running_loss = 0.0
         accumulated_displacement_loss = 0.0
         accumulated_weighting_loss = 0.0
+        accumulated_gripper_loss = 0.0
+        accumulated_collision_loss = 0.0
+
         for i, data in enumerate(tqdm(dataloader)):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
             else:
-                pointcloud, gripper_pcd, goal_gripper_pcd = data
+                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
 
             # inputs: B, N, 3
             # gripper_pcd: B, 4, 3
             # goal_gripper_points: B, 4, 3
             # gripper_pcd_history: B, H, 4, 3
             # calculate the displacement from every point to the gripper to get the labels with shape B, N, 4, 3
-            gripper_points = goal_gripper_pcd
             
+            if args.use_color:
+                gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+
+            gripper_points = goal_gripper_pcd
+
             if not args.predict_two_goals:
                 if args.add_one_hot_encoding:
                     # for pointcloud, we add (1, 0)
@@ -199,9 +219,12 @@ def train(args):
             inputs, labels = inputs.to(device), labels.to(device)
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
-            outputs = model(inputs) # B, N, 13
-            weights = outputs[:, :, -1] # B, N
-            outputs = outputs[:, :, :-1] # B, N, 12
+            outputs = model(inputs) # B, N, 15
+            collision = outputs[:, :, -1] # B, N
+            gripper_open = outputs[:, :, -2] # B, N
+            weights = outputs[:, :, -3] # B, N
+            outputs = outputs[:, :, :-3] # B, N, 12
+
             if args.output_obj_pcd_only:
                 weights = weights[:, :-4]
                 outputs = outputs[:, :-4, :]
@@ -230,6 +253,21 @@ def train(args):
                 loss = loss + avg_loss * args.weight_loss_weight
                 accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
 
+            # Gripper open/close and collision losses
+            
+            if args.use_gripper_open and args.use_collision:
+                weights = torch.nn.functional.softmax(weights, dim=1)
+                gripper_open = (gripper_open * weights).sum(dim=1)
+                collision = (collision * weights).sum(dim=1)
+
+                loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
+                loss = loss + loss_gripper.item()
+                accumulated_gripper_loss += loss_gripper.item()
+
+                loss_collision = bce_loss(collision, collision_gt.to(device))
+                loss = loss + loss_collision.item()
+                accumulated_collision_loss += loss_collision.item()
+    
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
@@ -243,13 +281,18 @@ def train(args):
                     "total_loss": running_loss / 1000,
                     "displacement_loss": accumulated_displacement_loss / 1000,
                     "weighting_loss": accumulated_weighting_loss / 1000,
+                    "gripper_loss": accumulated_gripper_loss / 1000,
+                    "collision_loss": accumulated_collision_loss / 1000,
+
                 }
 
-                wandb_run.log(log_info, step=global_step)
+                # wandb_run.log(log_info, step=global_step)
 
                 running_loss = 0.0
                 accumulated_displacement_loss = 0.0
                 accumulated_weighting_loss = 0.0
+                accumulated_gripper_loss = 0.0
+                accumulated_collision_loss = 0.0
 
             global_step += 1
 
@@ -287,6 +330,11 @@ def parse_args():
     parser.add_argument('--exp_name', type=str, default="")
     parser.add_argument('--n_obs_steps', type=int, default=1)
     parser.add_argument('--use_instance_norm', action='store_true')
+    parser.add_argument('--use_gripper_open', action='store_true')
+    parser.add_argument('--use_collision', action='store_true')
+    parser.add_argument('--use_color', action='store_true')
+
+
     return parser.parse_args()
 
 

@@ -15,6 +15,61 @@ original_gripper_pcd = np.array([[ 0.10432111,  0.00228697,  0.8474241 ],
 original_gripper_pos = np.array([0.1119802 , 0.00245327, 0.78287711])
 original_gripper_orn = np.array([0.97841681, 0.19802945, 0.0581003 , 0.01045192])
 
+def compute_plane_normal(gripper_pcd):
+    x1 = gripper_pcd[0]
+    x2 = gripper_pcd[1]
+    x4 = gripper_pcd[3]
+    v1 = x2 - x1
+    v2 = x4 - x1
+    normal = np.cross(v1, v2)
+    return normal / np.linalg.norm(normal)
+
+original_gripper_normal = compute_plane_normal(original_gripper_pcd)
+
+def quaternion_to_rotation_matrix(quat):
+    rotation = R.from_quat(quat)
+    return rotation.as_matrix()
+
+def rotation_matrix_to_quaternion(R_opt):
+    rotation = R.from_matrix(R_opt)
+    return rotation.as_quat()
+
+def rotation_matrix_from_vectors(v1, v2):
+    """
+    Find the rotation matrix that aligns v1 to v2
+    :param v1: A 3d "source" vector
+    :param v2: A 3d "destination" vector
+    :return mat: A transform matrix (3x3) which when applied to v1, aligns it with v2.
+    """
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 / np.linalg.norm(v2)
+    axis = np.cross(v1, v2)
+    axis_len = np.linalg.norm(axis)
+    if axis_len != 0:
+        axis = axis / axis_len
+    angle = np.arccos(np.dot(v1, v2))
+
+    K = np.array([[0, -axis[2], axis[1]],
+                  [axis[2], 0, -axis[0]],
+                  [-axis[1], axis[0], 0]])
+
+    R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * np.dot(K, K)
+    return R
+
+def get_gripper_pos_orient_from_4_points(gripper_pcd):
+    normal = compute_plane_normal(gripper_pcd)
+    R1 = rotation_matrix_from_vectors(original_gripper_normal, normal)
+    v1 = original_gripper_pcd[3] - original_gripper_pcd[0]
+    v2 = gripper_pcd[3] - gripper_pcd[0]
+    v1_prime = np.dot(R1, v1)
+    R2 = rotation_matrix_from_vectors(v1_prime, v2)
+    R = np.dot(R2, R1)
+    gripper_pos = original_gripper_pos + gripper_pcd[3] - original_gripper_pcd[3]
+    original_R = quaternion_to_rotation_matrix(original_gripper_orn)
+    R = np.dot(R, original_R)
+    gripper_orn = rotation_matrix_to_quaternion(R)
+    return gripper_pos, gripper_orn
+
 def rotation_transfer_matrix_to_6D_batch(rotate_matrix):
 
     # rotate_matrix.shape = (B, 9) or (B x 3, 3) rotation transpose (i.e., row vectors instead of column vectors)
@@ -152,7 +207,8 @@ def load_high_level_weighted_displacement_policy(model_name='model_60'):
     # load_model_path = f'/project_data/held/mnakuraf/RoboGen-sim2real/test_PointNet2/exps/pointnet2_super_model_invariant_2025-05-09_use_all_data_three_piece_assembly_d2_abs-obj_batch_norm/model_60.pth'
     # load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/three-piece-assembly/{model_name}.pth"
     # load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/threading-weighted-displacement/{model_name}.pth"
-    load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
+    # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
+    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth'
     print(load_model_path)
     pointnet2_model = PointNet2_super(num_classes=13, use_in=False).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))

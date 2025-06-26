@@ -209,6 +209,13 @@ torchrun --nproc_per_node="8" --nnodes="1" \
 ```
 By default, we use task `put_block_back` in `configs/sam2act_plus.yaml`. You can override this with any task in MemoryBench. Make sure that the `configs/sam2act_plus.yaml` has the same `task_id` with `configs/sam2act.yaml`, because the second stage training requires finding previous pre-trained weight in the same folder. Note that the only two differences between `mvt/configs/sam2act.yaml` and `mvt/configs/sam2act_plus.yaml` are that in `mvt/configs/sam2act_plus.yaml`, `use_memory` is set to be `True` and `num_maskmem` is valid during training. Make sure that `bs` in `configs/sam2act_plus.yaml` equals to `num_maskmem + 1`.
 
+### Creating Articubot dataset
+```
+WANDB_MODE="offline" torchrun --nproc_per_node="1" --nnodes="1"   convert_dataset.py   --exp_cfg_path configs/sam2act.yaml   --mvt_cfg_path mvt/configs/sam2act.yaml
+```
+
+Don't forget to change the name of the task. It expects dataset in `sam2act/data/YOUR_TASK`.
+
 ### More details about `train.py` and `train_plus.py`
 - wandb in offline mode is used by default, if you want to attach your wandb api key, please change the first line of training command and use the following command:
 ```

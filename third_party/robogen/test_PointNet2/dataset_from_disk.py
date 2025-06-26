@@ -138,7 +138,9 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
         pointcloud = data['point_cloud'][:][0].astype(np.float32)
         gripper_pcd = data['gripper_pcd'][:][0].astype(np.float32)
         goal_gripper_pcd = data['goal_gripper_pcd'][:][0].astype(np.float32)
-        return pointcloud, gripper_pcd, goal_gripper_pcd
+        gripper_open = data['action'][-2].astype(np.float32)
+        collision = data['action'][-1].astype(np.float32)
+        return pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open, collision
 
     def __getitem__(self, idx):
         # TODO for conditioning:
@@ -158,7 +160,7 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
             # pointcloud = data['point_cloud'][:][0].astype(np.float32)
             # gripper_pcd = data['gripper_pcd'][:][0].astype(np.float32)
             # goal_gripper_pcd = data['goal_gripper_pcd'][:][0].astype(np.float32)
-            pointcloud, gripper_pcd, goal_gripper_pcd = self.read_pickle_data(episode_idx, start_idx)
+            pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open, collision = self.read_pickle_data(episode_idx, start_idx)
             remaining_steps = self.n_obs_steps - 1
             gripper_pcd_history = []
             for i in range(start_idx - remaining_steps, start_idx):
@@ -195,7 +197,7 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
         if not self.conditioning_on_demo:
             if self.n_obs_steps > 1:
                 return pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history
-            return pointcloud, gripper_pcd, goal_gripper_pcd
+            return pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open, collision
         else:
             if False:
                 from matplotlib import pyplot as plt
@@ -582,6 +584,8 @@ def get_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_ratio=0.9, eval
             all_obj_paths = ['/scratch/minon/three_piece_assembly_d2_abs']
         elif num_train_objects == 'threading_D2_abs':
             all_obj_paths = ['/home/ktsim/data/threading_d2_articubot']
+        elif num_train_objects == 'put_money_in_safe':
+            all_obj_paths = ['/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_articubot']
         else:
             raise ValueError('num_train_objects not supported')
         
