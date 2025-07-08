@@ -267,11 +267,15 @@ def experiment(cmd_args, devices, rank, node_rank, world_size):
         num_workers=0, #exp_cfg.num_workers,
         only_train=True,
         sample_distribution_mode=exp_cfg.sample_distribution_mode,
+        create_articubot_dataset=cmd_args.create_articubot_dataset,
+        args=cmd_args,
         # num_maskmem=mvt_cfg.num_maskmem,
         # rank=rank,
     )
     train_dataset, _ = get_dataset_func()
     t_end = time.time()
+
+    exit()
 
     if rank == 0:
         print("Created Dataset. Time Cost: {} minutes".format((t_end - t_start) / 60.0))
@@ -394,6 +398,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--log-dir", type=str, default="runs")
     parser.add_argument("--with-eval", action="store_true", default=False)
+    parser.add_argument("--create-articubot-dataset", action="store_true", default=False)
+
 
     cmd_args = parser.parse_args()
     del (

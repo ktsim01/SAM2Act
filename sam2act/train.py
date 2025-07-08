@@ -251,7 +251,7 @@ def experiment(cmd_args, devices, rank, node_rank, world_size):
     )
 
     t_start = time.time()
-    get_dataset_func = lambda: get_dataset_temporal(
+    get_dataset_func = lambda: get_dataset(
         tasks,
         BATCH_SIZE_TRAIN,
         None,
@@ -264,11 +264,11 @@ def experiment(cmd_args, devices, rank, node_rank, world_size):
         None,
         cmd_args.refresh_replay,
         device,
-        num_workers=exp_cfg.num_workers,
+        num_workers=0, #exp_cfg.num_workers,
         only_train=True,
         sample_distribution_mode=exp_cfg.sample_distribution_mode,
-        num_maskmem=mvt_cfg.num_maskmem,
-        rank=rank,
+        # num_maskmem=mvt_cfg.num_maskmem,
+        # rank=rank,
     )
     train_dataset, _ = get_dataset_func()
     t_end = time.time()

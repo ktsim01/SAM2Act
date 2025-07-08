@@ -42,6 +42,7 @@ sam2act/replay_temporal_colosseum
 sam2act/replay_temporal_memory
 sam2act/runs
 sam2act/wandb
+third_party/robogen/test_PointNet2/exps
 
 sam2act/mvt/sam2_train/checkpoints/sam2_hiera_base_plus.pt
 sam2act/mvt/sam2_train/checkpoints/sam2_hiera_large.pt

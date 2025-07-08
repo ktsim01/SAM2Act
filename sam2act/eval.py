@@ -52,7 +52,7 @@ from sam2act.utils.rvt_utils import (
     RLBENCH_TASKS,
 )
 from sam2act.utils.rvt_utils import load_agent_only_model as load_agent_state
-
+import third_party.robogen.robogen_utils as ru
 
 def get_model_size(model):
     """
@@ -85,6 +85,7 @@ def load_agent(
     eval_log_dir="",
     device=0,
     use_input_place_with_mean=False,
+    articubot=False,
 ):
     device = f"cuda:{device}"
 
@@ -181,6 +182,7 @@ def load_agent(
             sam2act = mvt_sam2.MVT_SAM2(
                 renderer_device=device,
                 rank=0,
+                articubot=articubot,
                 **mvt_cfg,
             )
 
@@ -237,7 +239,11 @@ def eval(
     log_dir=None,
     verbose=True,
     save_video=False,
+    rollout_articubot=False,
+    high_level_policy=None,
+    binary_high_level=None,
 ):
+    
     agent.eval()
     # if isinstance(agent, sam2e_agent.SAM2E_Agent):
     agent.load_clip()
@@ -324,6 +330,9 @@ def eval(
                 eval_demo_seed=ep,
                 record_enabled=False,
                 replay_ground_truth=replay_ground_truth,
+                high_level_policy=high_level_policy,
+                binary_high_level=binary_high_level,
+                rollout_articubot=rollout_articubot,
             )
             try:
                 for replay_transition in generator:
@@ -549,7 +558,14 @@ def _eval(args):
                 use_input_place_with_mean=args.use_input_place_with_mean,
             )
             agent_eval_log_dir = os.path.join(args.eval_log_dir, "final")
+        
+        high_level_policy = None
+        binary_high_level = None
 
+        if args.rollout_articubot:
+            high_level_policy = ru.load_high_level_weighted_displacement_policy()
+            binary_high_level = ru.load_high_level_binary_prediction()      
+        
         os.makedirs(agent_eval_log_dir, exist_ok=True)
         scores = eval(
             agent=agent,
@@ -565,6 +581,9 @@ def _eval(args):
             log_dir=agent_eval_log_dir,
             verbose=True,
             save_video=args.save_video,
+            rollout_articubot=args.rollout_articubot,
+            high_level_policy=high_level_policy,
+            binary_high_level=binary_high_level,
         )
         print(f"model {model_path}, scores {scores}")
         task_scores = {}

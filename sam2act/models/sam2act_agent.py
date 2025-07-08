@@ -26,7 +26,8 @@ from peract_colab.arm.optim.lamb import Lamb
 from yarr.agents.agent import ActResult
 from sam2act.utils.dataset import _clip_encode_text
 from sam2act.utils.lr_sched_utils import GradualWarmupScheduler
-
+from sam2act.utils.dataset import _get_articubot_dataset
+import third_party.robogen.robogen_utils as ru
 
 def eval_con(gt, pred):
     assert gt.shape == pred.shape, print(f"{gt.shape} {pred.shape}")
@@ -322,6 +323,7 @@ class SAM2Act_Agent:
         rot_ver: int = 0,
         rot_x_y_aug: int = 2,
         log_dir="",
+        articubot=False,
         action_horizon=None,
         same_trans_aug_per_seq: bool = False,
         use_memory: bool = False,
@@ -372,6 +374,8 @@ class SAM2Act_Agent:
         self.move_pc_in_bound = move_pc_in_bound
         self.rot_ver = rot_ver
         self.rot_x_y_aug = rot_x_y_aug
+
+        self.articubot = articubot
 
         self._cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
         if isinstance(self._network, DistributedDataParallel):
@@ -531,7 +535,6 @@ class SAM2Act_Agent:
         """
         bs, nc, h, w = dims
         assert isinstance(only_pred, bool)
-
         if get_q_trans:
             pts = None
             # (bs, h*w, nc)
@@ -889,6 +892,7 @@ class SAM2Act_Agent:
         proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
 
         obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
+
         pc, img_feat = rvt_utils.get_pc_img_feat(
             obs,
             pcd,
@@ -922,6 +926,7 @@ class SAM2Act_Agent:
             proprio=proprio,
             lang_emb=lang_goal_embs,
             img_aug=0,  # no img augmentation while acting
+            articubot=self.articubot,
         )
         _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
             out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
@@ -930,12 +935,134 @@ class SAM2Act_Agent:
             out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         )
 
+        with open("output.txt", 'a') as f:
+            f.write(f'{pred_wpt}, {pred_rot_quat}, {pred_grip}, {pred_coll}\n')
+
         continuous_action = np.concatenate(
             (
                 pred_wpt[0].cpu().numpy(),
                 pred_rot_quat[0],
                 pred_grip[0].cpu().numpy(),
                 pred_coll[0].cpu().numpy(),
+            )
+        )
+        if pred_distri:
+            x_distri = rot_grip_q[
+                0,
+                0 * self._num_rotation_classes : 1 * self._num_rotation_classes,
+            ]
+            y_distri = rot_grip_q[
+                0,
+                1 * self._num_rotation_classes : 2 * self._num_rotation_classes,
+            ]
+            z_distri = rot_grip_q[
+                0,
+                2 * self._num_rotation_classes : 3 * self._num_rotation_classes,
+            ]
+            return ActResult(continuous_action), (
+                x_distri.cpu().numpy(),
+                y_distri.cpu().numpy(),
+                z_distri.cpu().numpy(),
+            )
+        else:
+            return ActResult(continuous_action)
+        
+    @torch.no_grad()
+    def act_with_articubot(
+        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, binary_high_level=None
+    ) -> ActResult:
+        # if self.add_lang:
+        #     lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
+        #     _, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
+        #     lang_goal_embs = lang_goal_embs.float()
+        # else:
+        #     lang_goal_embs = (
+        #         torch.zeros(observation["lang_goal_embs"].shape)
+        #         .float()
+        #         .to(self._device)
+        #     )
+
+        proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
+
+        obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
+
+        obs_dict = _get_articubot_dataset(observation, add_one_hot=True)
+
+        gripper_open, collision = ru.run_high_level_policy_binary_inference(binary_high_level, obs_dict)
+
+        obs_dict['point_cloud'] = obs_dict['point_cloud'][..., :3]
+        obs_dict['gripper_pcd'] = obs_dict['gripper_pcd'][..., :3]
+
+        subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict,
+                                                                        return_weights=True)
+        
+
+        # pc, img_feat = rvt_utils.get_pc_img_feat(
+        #     obs,
+        #     pcd,
+        # )
+
+        # pc, img_feat = rvt_utils.move_pc_in_bound(
+        #     pc, img_feat, self.scene_bounds, no_op=not self.move_pc_in_bound
+        # )
+
+        # # TODO: Vectorize
+        # pc_new = []
+        # rev_trans = []
+        # for _pc in pc:
+        #     a, b = mvt_utils.place_pc_in_cube(
+        #         _pc,
+        #         with_mean_or_bounds=self._place_with_mean,
+        #         scene_bounds=None if self._place_with_mean else self.scene_bounds,
+        #     )
+        #     pc_new.append(a)
+        #     rev_trans.append(b)
+        # pc = pc_new
+
+        # bs = len(pc)
+        # nc = self._net_mod.num_img
+        # h = w = self._net_mod.img_size
+        # dyn_cam_info = None
+
+        # out = self._network(
+        #     pc=pc,
+        #     img_feat=img_feat,
+        #     proprio=proprio,
+        #     lang_emb=lang_goal_embs,
+        #     img_aug=0,  # no img augmentation while acting
+        # )
+        # _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
+        #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
+        # )
+        # pred_wpt, pred_rot_quat, pred_grip, pred_coll = self.get_pred(
+        #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
+        # )
+
+        pred_wpt, pred_rot_quat = ru.get_gripper_pos_orient_from_4_points(subgoal_pred[:12].reshape(4,3).detach().cpu().numpy())
+
+        # print('Subgoal Pred:', subgoal_pred)
+        # print('pred_wpt and pred_rot_quat:', pred_wpt, pred_rot_quat)
+        pred_grip = gripper_open
+        pred_coll = collision
+
+        # import pickle
+        # output = {'prediction': subgoal_pred, 'weights': weights, 'pointcloud': obs_dict['point_cloud']}
+        # with open('debugging.pkl', 'wb') as f:
+        #     pickle.dump(output, f)
+        #     exit()
+
+        
+
+        with open("output_articubot.txt", 'a') as f:
+            f.write(f'{pred_wpt}, {pred_rot_quat}, {pred_grip}, {pred_coll}\n')
+
+
+        continuous_action = np.concatenate(
+            (
+                pred_wpt,
+                pred_rot_quat,
+                pred_grip[0].detach().cpu().numpy(),
+                pred_coll[0].detach().cpu().numpy(),
             )
         )
         if pred_distri:

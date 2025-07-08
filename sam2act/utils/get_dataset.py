@@ -7,7 +7,7 @@ import clip
 
 from sam2act.libs.peract.helpers.utils import extract_obs
 from sam2act.utils.rvt_utils import ForkedPdb
-from sam2act.utils.dataset import create_replay, fill_replay, create_replay_temporal, fill_replay_temporal
+from sam2act.utils.dataset import create_replay, fill_replay, create_replay_temporal, fill_replay_temporal, fill_articubot
 from sam2act.utils.peract_utils import (
     CAMERAS,
     SCENE_BOUNDS,
@@ -34,6 +34,8 @@ def get_dataset(
     num_workers,
     only_train,
     sample_distribution_mode="transition_uniform",
+    create_articubot_dataset=False,
+    args=None,
 ):
 
     train_replay_buffer = create_replay(
@@ -85,26 +87,48 @@ def get_dataset(
                 print(f"remove {test_replay_storage_folder}")
 
         # print("----- Train Buffer -----")
-        fill_replay(
-            replay=train_replay_buffer,
-            task=task,
-            task_replay_storage_folder=train_replay_storage_folder,
-            start_idx=0,
-            num_demos=NUM_TRAIN,
-            demo_augmentation=True,
-            demo_augmentation_every_n=DEMO_AUGMENTATION_EVERY_N,
-            cameras=CAMERAS,
-            rlbench_scene_bounds=SCENE_BOUNDS,
-            voxel_sizes=VOXEL_SIZES,
-            rotation_resolution=ROTATION_RESOLUTION,
-            crop_augmentation=False,
-            data_path=data_path_train,
-            episode_folder=EPISODE_FOLDER,
-            variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
-            clip_model=clip_model,
-            device=device,
-        )
+        if create_articubot_dataset:
+            fill_articubot(
+                replay=train_replay_buffer,
+                task=task,
+                task_replay_storage_folder=train_replay_storage_folder,
+                start_idx=0,
+                num_demos=NUM_TRAIN,
+                demo_augmentation=True,
+                demo_augmentation_every_n=DEMO_AUGMENTATION_EVERY_N,
+                cameras=CAMERAS,
+                rlbench_scene_bounds=SCENE_BOUNDS,
+                voxel_sizes=VOXEL_SIZES,
+                rotation_resolution=ROTATION_RESOLUTION,
+                crop_augmentation=False,
+                data_path=data_path_train,
+                episode_folder=EPISODE_FOLDER,
+                variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
+                clip_model=clip_model,
+                device=device,
+                args=args,
+            )
 
+        else:
+            fill_replay(
+                replay=train_replay_buffer,
+                task=task,
+                task_replay_storage_folder=train_replay_storage_folder,
+                start_idx=0,
+                num_demos=NUM_TRAIN,
+                demo_augmentation=True,
+                demo_augmentation_every_n=DEMO_AUGMENTATION_EVERY_N,
+                cameras=CAMERAS,
+                rlbench_scene_bounds=SCENE_BOUNDS,
+                voxel_sizes=VOXEL_SIZES,
+                rotation_resolution=ROTATION_RESOLUTION,
+                crop_augmentation=False,
+                data_path=data_path_train,
+                episode_folder=EPISODE_FOLDER,
+                variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
+                clip_model=clip_model,
+                device=device,
+            )
         if not only_train:
             # print("----- Test Buffer -----")
             fill_replay(

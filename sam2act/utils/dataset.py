@@ -13,6 +13,7 @@ import open3d as o3d
 
 import clip
 import peract_colab.arm.utils as utils
+from sam2act.libs.peract.helpers import utils as peract_helper_utils
 
 from peract_colab.rlbench.utils import get_stored_demo
 from yarr.utils.observation_type import ObservationElement
@@ -22,12 +23,19 @@ from yarr.replay_buffer.uniform_replay_buffer_temporal import UniformReplayBuffe
 from rlbench.backend.observation import Observation
 from rlbench.demo import Demo
 
+import sam2act.utils.peract_utils as peract_utils
+import sam2act.mvt.utils as mvt_utils
+import sam2act.utils.rvt_utils as rvt_utils
+import peract_colab.arm.utils as arm_utils
+from sam2act.mvt.mvt_sam2_single import MVT_SAM2_Single
+
 from sam2act.utils.peract_utils import LOW_DIM_SIZE, IMAGE_SIZE, CAMERAS
 from sam2act.libs.peract.helpers.demo_loading_utils import keypoint_discovery
 from sam2act.libs.peract.helpers.utils import extract_obs
 from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_batch, rotation_transfer_matrix_to_6D, \
                           get_4_points_from_gripper_pos_orient
 
+from eval import load_agent
 
 def create_replay(
     batch_size: int,
@@ -299,6 +307,7 @@ def _get_action(
     voxel_sizes: List[int],
     rotation_resolution: int,
     crop_augmentation: bool,
+    articubot_dataset=False
 ):
     quat = utils.normalize_quaternion(obs_tp1.gripper_pose[3:])
     if quat[-1] < 0:
@@ -320,13 +329,23 @@ def _get_action(
     rot_and_grip_indicies = disc_rot.tolist()
     grip = float(obs_tp1.gripper_open)
     rot_and_grip_indicies.extend([int(obs_tp1.gripper_open)])
-    return (
-        trans_indicies,
-        rot_and_grip_indicies,
-        ignore_collisions,
-        np.concatenate([obs_tp1.gripper_pose, np.array([grip]), np.array([ignore_collisions])]),
-        attention_coordinates,
-    )
+    if articubot_dataset:
+        return (
+            trans_indicies,
+            rot_and_grip_indicies,
+            ignore_collisions,
+            np.concatenate([obs_tp1.gripper_pose, np.array([grip]), np.array([ignore_collisions])]),
+            attention_coordinates,
+        )
+    else:
+        return (
+            trans_indicies,
+            rot_and_grip_indicies,
+            ignore_collisions,
+            np.concatenate([obs_tp1.gripper_pose, np.array([grip])]),
+            attention_coordinates,
+        )
+
 
 
 # extract CLIP language features for goal string
@@ -346,23 +365,159 @@ def _clip_encode_text(clip_model, text):
 
     return x, emb
 
-# add individual data points to a replay
+# Create articubot dataset for each frame
 def _create_articubot_dataset(
-    obs, episode_num, sample_frame, key_frame_obs, action
+    obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict
 ):
+    # Construct point cloud
     folder_name = 'episode_' + str(episode_num)
     print(episode_num, sample_frame)
     
-    
-    front_pcd = obs.front_point_cloud.reshape(-1, 3)
-    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
-    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
-    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+    # front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    # wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    # left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    # right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
 
-    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
-    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
-    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
-    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+    # front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    # wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    # left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    # right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+
+    # all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    # all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    # Getting SAM2 features
+    proprio = arm_utils.stack_on_channel(obs_dict['low_dim_state'])
+
+    new_obs, pcd = peract_utils._preprocess_inputs(obs_dict, agent.cameras)
+
+    pc, img_feat = rvt_utils.get_pc_img_feat(
+        new_obs,
+        pcd,
+    )
+
+    pc, img_feat = rvt_utils.move_pc_in_bound(
+        pc, img_feat, agent.scene_bounds, no_op=not agent.move_pc_in_bound
+    )
+
+    img = agent._network.render(
+                pc=pc,
+                img_feat=img_feat,
+                img_aug=0,
+                mvt1_or_mvt2=True,
+                dyn_cam_info=None,
+            )
+    out = agent._network.mvt1(
+            img=img,
+            proprio=proprio,
+            lang_emb=None,
+            wpt_local=None,
+            rot_x_y=None,
+            # hm_gt=hm_gt,
+    ) # 3, 32, 64, 64
+
+    upsample = torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+
+    out = upsample[0](out) # 3, 32, 128, 128
+
+    front_point_cloud, front_feature = reproject_features_to_3d(out[0], obs_dict['front_depth'].reshape(-1, *obs_dict['front_depth'].shape[4:]), obs_dict['front_camera_intrinsics'].reshape(-1, *obs_dict['front_camera_intrinsics'].shape[3:])) # N, 32
+    left_point_cloud, left_feature = reproject_features_to_3d(out[1], obs_dict['left_shoulder_depth'].reshape(-1, *obs_dict['left_shoulder_depth'].shape[4:]), obs_dict['left_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_intrinsics'].shape[3:])) # N, 32
+    right_point_cloud, right_feature = reproject_features_to_3d(out[2], obs_dict['right_shoulder_depth'].reshape(-1, *obs_dict['right_shoulder_depth'].shape[4:]), obs_dict['right_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_intrinsics'].shape[3:])) # N, 32
+    
+    all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0).detach().cpu().numpy()
+    all_features = torch.concat([front_feature, left_feature, right_feature], axis=0).detach().cpu().numpy()
+
+    # Randomly sample 30,000 points from the point cloud
+    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    np_points = all_pcd[rand_indx]
+    np_rgb = all_features[rand_indx]    
+
+    # obj_pcd = o3d.geometry.PointCloud()
+    # obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    # obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+
+    # sampled_pcd = obj_pcd.farthest_point_down_sample(4500)
+
+    # sampled_points = np.asarray(sampled_pcd.points)
+    # sampled_rgb = np.asarray(sampled_pcd.colors)
+    point_cloud = np.concatenate([np_points, np_rgb], axis=1)
+
+    data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
+            'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+            'state': obs.get_low_dim_data()}
+    
+    if not os.path.exists('data/put_money_in_safe_featurized/' + folder_name):
+        os.makedirs('data/put_money_in_safe_featurized/' + folder_name)
+    
+    with open('data/put_money_in_safe_featurized/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
+        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
+        pickle.dump(data, f)
+
+def reproject_features_to_3d(features, depth, intrinsics):
+    """
+    Reprojects 2D features with a depth map into 3D space.
+
+    Args:
+        features (torch.Tensor): shape (C, H, W)
+        depth (torch.Tensor): shape (H, W)
+        intrinsics (torch.Tensor): shape (3, 3)
+
+    Returns:
+        xyz_points (torch.Tensor): shape (H*W, 3)
+        features_3d (torch.Tensor): shape (H*W, C)
+    """
+    assert features.shape[1:] == depth.shape, "Feature and depth resolution mismatch"
+    
+    C, H, W = features.shape
+    device = features.device
+
+    # Mask out invalid depth (e.g., zeros)
+    valid_mask = depth > 0
+    num_valid = valid_mask.sum()
+
+    # Create pixel grid
+    y, x = torch.meshgrid(torch.arange(H, device=device), torch.arange(W, device=device), indexing='ij')
+    x = x[valid_mask]
+    y = y[valid_mask]
+    z = depth[valid_mask]
+
+    ones = torch.ones_like(x)
+    pixel_coords = torch.stack([x, y, ones], dim=0).float()  # (3, N)
+
+    # Inverse intrinsics
+    K_inv = torch.inverse(intrinsics.to(device))
+
+    # Unproject
+    cam_coords = K_inv @ pixel_coords  # (3, N)
+    cam_coords = cam_coords * z  # scale rays by depth
+    xyz_points = cam_coords.T  # (N, 3)
+
+    # Get features at valid pixels
+    point_features = features.permute(1, 2, 0)[valid_mask]  # (N, C)
+
+    return xyz_points, point_features
+
+
+# For rolling out
+def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
+    front_pcd = obs['front_point_cloud'].detach().cpu().numpy()
+    front_pcd = front_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
+    wrist_pcd = obs['wrist_point_cloud'].detach().cpu().numpy()
+    wrist_pcd = wrist_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
+    left_shoulder_pcd = obs['left_shoulder_point_cloud'].detach().cpu().numpy()
+    left_shoulder_pcd = left_shoulder_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)    
+    right_shoulder_pcd = obs['right_shoulder_point_cloud'].detach().cpu().numpy()
+    right_shoulder_pcd = right_shoulder_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
+
+    front_rgb = obs['front_rgb'].detach().cpu().numpy()
+    front_rgb = front_rgb[0, 0].transpose([1,2,0]).reshape(-1, 3) / 255.0
+    wrist_rgb = obs['wrist_rgb'].detach().cpu().numpy()
+    wrist_rgb = wrist_rgb[0, 0].transpose([1,2,0]).reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs['left_shoulder_rgb'].detach().cpu().numpy()
+    left_shoulder_rgb = left_shoulder_rgb[0, 0].transpose([1,2,0]).reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs['right_shoulder_rgb'].detach().cpu().numpy()
+    right_shoulder_rgb = right_shoulder_rgb[0, 0].transpose([1,2,0]).reshape(-1, 3) / 255.0
 
     all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
     all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
@@ -379,19 +534,67 @@ def _create_articubot_dataset(
 
     sampled_points = np.asarray(sampled_pcd.points)
     sampled_rgb = np.asarray(sampled_pcd.colors)
-    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
 
-    data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
-            'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
-            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
-            'state': obs.get_low_dim_data()}
+    if add_rgb:
+        point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+    else: 
+        point_cloud = sampled_points
+
+    gripper_pose = obs['gripper_pose'][0][0].detach().cpu().numpy()
+    joint_pos = obs['gripper_joint_positions'][0][0].detach().cpu().numpy()
+
+    gripper_pcd = np.expand_dims(get_4_points_from_gripper_pos_orient(gripper_pose[:3], gripper_pose[3:7], joint_pos[1]), axis=0)
+    gripper_pcd = torch.from_numpy(gripper_pcd)
+
+    if add_rgb:
+        gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+
+    point_cloud = torch.from_numpy(np.expand_dims(point_cloud, axis=0))
+
+    if add_one_hot:
+        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], 2)
+        pointcloud_one_hot[:, :, 0] = 1
+        point_cloud = torch.cat([point_cloud, pointcloud_one_hot], dim=2)
+        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+        gripper_pcd_one_hot[:, :, 1] = 1
+        gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
     
-    if not os.path.exists('data/put_money_in_safe_articubot/' + folder_name):
-        os.makedirs('data/put_money_in_safe_articubot/' + folder_name)
+    point_cloud = point_cloud.unsqueeze(0)
+    gripper_pcd = gripper_pcd.unsqueeze(0)
     
-    with open('data/put_money_in_safe_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
-        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
-        pickle.dump(data, f)
+    obs_dict = {'point_cloud': point_cloud,
+                'gripper_pcd': gripper_pcd,}
+    
+    return obs_dict
+
+
+def visualize(points, predictions):
+    point_geometry = o3d.geometry.PointCloud()
+    print(points.shape)
+    print(predictions.shape)
+    point_geometry.points = o3d.utility.Vector3dVector(points[:, :, :, :3].reshape(-1, 3))
+    point_geometry.colors = o3d.utility.Vector3dVector(np.tile(np.array([[1, 0, 0]]), (4500,1)))
+
+    
+    # gripper_geometry = o3d.geometry.PointCloud()
+    # gripper_geometry.points = o3d.utility.Vector3dVector(points[1024:1162])
+    # gripper_geometry.colors = o3d.utility.Vector3dVector(np.tile(np.array([[1, 0, 0]]), (138, 1)))
+
+    four_point_geometry = o3d.geometry.PointCloud()
+    four_point_geometry.points = o3d.utility.Vector3dVector(predictions[0, :, :, :].reshape(-1, 3).detach().cpu().numpy())
+    four_point_geometry.paint_uniform_color(np.array([0, 1, 0]))
+    # four_point_geometry.colors = o3d.utility.Vector3dVector(np.tile(np.array([[0, 1, 0]]), (4, 1)))
+
+    # gripper_geometry = o3d.geometry.PointCloud()
+    # gripper_geometry.points = o3d.utility.Vector3dVector(gripper_pcd[0, :,:3].reshape(-1, 3))
+    # gripper_geometry.paint_uniform_color(np.array([0, 0, 1]))
+
+    # goal_gripper_geometry = o3d.geometry.PointCloud()
+    # goal_gripper_geometry.points = o3d.utility.Vector3dVector(goal_gripper_pcd[0, :,:3].reshape(-1, 3))
+    # goal_gripper_geometry.paint_uniform_color(np.array([0, 0, 0]))
+
+    # o3d.visualization.draw_geometries([point_geometry, four_point_geometry, goal_pcd, mesh_frame])
+    o3d.visualization.draw_geometries([point_geometry, four_point_geometry])
 
 # add individual data points to a replay
 def _add_keypoints_to_replay(
@@ -503,7 +706,6 @@ def _add_keypoints_to_replay(
     obs_dict_tp1.update(final_obs)
     replay.add_final(task, task_replay_storage_folder, **obs_dict_tp1)
 
-
 def fill_replay(
     replay: ReplayBuffer,
     task: str,
@@ -522,6 +724,111 @@ def fill_replay(
     variation_desriptions_pkl: str,
     clip_model=None,
     device="cpu",
+):
+    disk_exist = False
+    if replay._disk_saving:
+        if os.path.exists(task_replay_storage_folder):
+            print(
+                "[Info] Replay dataset already exists in the disk: {}".format(
+                    task_replay_storage_folder
+                ),
+                flush=True,
+            )
+            disk_exist = True
+        else:
+            logging.info("\t saving to disk: %s", task_replay_storage_folder)
+            os.makedirs(task_replay_storage_folder, exist_ok=True)
+
+    if disk_exist:
+        replay.recover_from_disk(task, task_replay_storage_folder)
+    else:
+        print("Filling replay ...:", task)
+        for d_idx in range(start_idx, start_idx + num_demos):
+            print("Filling demo %d" % d_idx)
+            demo = get_stored_demo(data_path=data_path, index=d_idx)
+
+            # get language goal from disk
+            varation_descs_pkl_file = os.path.join(
+                data_path, episode_folder % d_idx, variation_desriptions_pkl
+            )
+            with open(varation_descs_pkl_file, "rb") as f:
+                descs = pickle.load(f)
+
+            # extract keypoints
+            episode_keypoints = keypoint_discovery(demo)  # list of keypoint   [id0, id1, id2]
+            next_keypoint_idx = 0
+            for i in range(len(demo) - 1):
+                if not demo_augmentation and i > 0:
+                    break
+                if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
+                    continue
+
+                obs = demo[i]
+                desc = descs[0]
+                # if our starting point is past one of the keypoints, then remove it
+                while (
+                    next_keypoint_idx < len(episode_keypoints)
+                    and i >= episode_keypoints[next_keypoint_idx]
+                ):
+                    next_keypoint_idx += 1
+                if next_keypoint_idx == len(episode_keypoints):
+                    break
+                _add_keypoints_to_replay(
+                    replay,
+                    task,
+                    task_replay_storage_folder,
+                    d_idx,
+                    i,
+                    obs,
+                    demo,
+                    episode_keypoints,
+                    cameras,
+                    rlbench_scene_bounds,
+                    voxel_sizes,
+                    rotation_resolution,
+                    crop_augmentation,
+                    next_keypoint_idx=next_keypoint_idx,
+                    description=desc,
+                    clip_model=clip_model,
+                    device=device,
+                )
+
+        # save TERMINAL info in replay_info.npy
+        task_idx = replay._task_index[task]
+        with open(
+            os.path.join(task_replay_storage_folder, "replay_info.npy"), "wb"
+        ) as fp:
+            np.save(
+                fp,
+                replay._store["terminal"][
+                    replay._task_replay_start_index[
+                        task_idx
+                    ] : replay._task_replay_start_index[task_idx]
+                    + replay._task_add_count[task_idx].value
+                ],
+            )
+
+        print("Replay filled with demos.")
+
+def fill_articubot(
+    replay: ReplayBuffer,
+    task: str,
+    task_replay_storage_folder: str,
+    start_idx: int,
+    num_demos: int,
+    demo_augmentation: bool,
+    demo_augmentation_every_n: int,
+    cameras: List[str],
+    rlbench_scene_bounds: List[float],  # AKA: DEPTH0_BOUNDS
+    voxel_sizes: List[int],
+    rotation_resolution: int,
+    crop_augmentation: bool,
+    data_path: str,
+    episode_folder: str,
+    variation_desriptions_pkl: str,
+    clip_model=None,
+    device="cpu",
+    args=None,
 ):
 
     disk_exist = False
@@ -542,6 +849,18 @@ def fill_replay(
         replay.recover_from_disk(task, task_replay_storage_folder)
     else:
         print("Filling replay ...:", task)
+        model_path = 'runs/sam2act_rlbench/model_89.pth'
+
+        agent = load_agent(
+                model_path=model_path,
+                exp_cfg_path=args.exp_cfg_path,
+                mvt_cfg_path=args.mvt_cfg_path,
+                eval_log_dir=None,
+                device=args.device,
+                use_input_place_with_mean=False,
+                articubot=True,
+        )
+
         for d_idx in range(start_idx, start_idx + num_demos):
             print("Filling demo %d" % d_idx)
             demo = get_stored_demo(data_path=data_path, index=d_idx)
@@ -582,10 +901,44 @@ def fill_replay(
                     voxel_sizes,
                     rotation_resolution,
                     crop_augmentation,
+                    articubot_dataset=True,
                 )
-                            
-                _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action)
-                desc = descs[0]
+
+                camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
+                # obs_config = peract_helper_utils.create_obs_config(CAMERAS, camera_resolution, method_name="", use_mask_from_replay=False)
+
+                obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
+                    obs,
+                    CAMERAS,
+                    t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
+                    prev_action=None,
+                    episode_length=25,
+                )
+
+                def reshape_dict_arrays_to_tensor(input_dict):
+                    """
+                    Converts every NumPy array in a dictionary to a PyTorch tensor
+                    with shape (1, 1, n), where n is the flattened size of the array.
+
+                    Args:
+                        input_dict (dict): Dictionary with NumPy array values.
+
+                    Returns:
+                        dict: Dictionary with reshaped torch.Tensor values.
+                    """
+                    output_dict = {}
+                    for key, value in input_dict.items():
+                        if isinstance(value, np.ndarray):
+                            tensor = torch.tensor(value, dtype=torch.float32, device='cuda:0').unsqueeze(0).unsqueeze(0)
+                            output_dict[key] = tensor
+                        else:
+                            raise TypeError(f"Value for key '{key}' is not a NumPy array.")
+                    return output_dict
+                
+                obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
+                
+                _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+                # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it
                 # while (
                 #     next_keypoint_idx < len(episode_keypoints)

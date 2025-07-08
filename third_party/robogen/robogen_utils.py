@@ -2,9 +2,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
 from torch.utils.data import DataLoader
-from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super
+from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary
 from matplotlib import pyplot as plt
 import torch
+from termcolor import cprint
 
 ROOT_DIR = Path(__file__).parent.parent.parent
 
@@ -201,16 +202,21 @@ def get_goal_gripper_pos_eefs(actions, eef_pos, eef_quat, eef_qpos, closed_thres
     assert expanded_goal_eef_qpos.shape[0] == len(actions)
     return expanded_goal_eef_pos, expanded_goal_eef_quat, expanded_goal_eef_qpos
 
-def load_high_level_weighted_displacement_policy(model_name='model_60'):
-    load_model_path = model_name
-    # load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/square-d2-weighted-displacement/{model_name}.pth"
-    # load_model_path = f'/project_data/held/mnakuraf/RoboGen-sim2real/test_PointNet2/exps/pointnet2_super_model_invariant_2025-05-09_use_all_data_three_piece_assembly_d2_abs-obj_batch_norm/model_60.pth'
-    # load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/three-piece-assembly/{model_name}.pth"
-    # load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/threading-weighted-displacement/{model_name}.pth"
+def load_high_level_weighted_displacement_policy():
     # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
-    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth'
-    print(load_model_path)
-    pointnet2_model = PointNet2_super(num_classes=13, use_in=False).to('cuda')
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
+    cprint(load_model_path, color='yellow')
+    pointnet2_model = PointNet2_super(num_classes=15, input_channel=6, use_in=False).to('cuda')
+    pointnet2_model.load_state_dict(torch.load(load_model_path))
+    pointnet2_model.eval()
+    return pointnet2_model
+
+def load_high_level_binary_prediction():
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
+    cprint(load_model_path, color='yellow')
+    pointnet2_model = PointNet2_Binary(num_classes=2, input_channel=5, use_in=False).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -222,26 +228,72 @@ def load_high_level_gmm_policy(epoch=30):
     pointnet2_model.eval()
     return pointnet2_model
 
-def run_high_level_policy_inference(policy, batch, return_weights=False):
+def run_high_level_policy_inference(policy, batch, return_weights=False, gripper_open=None, collision=None):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
-    inputs = torch.cat([pointcloud, gripper_pcd], dim=1)
+
+    inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
     inputs = inputs.to('cuda')
     inputs_ = inputs.permute(0, 2, 1)
     outputs = policy(inputs_)
-    weights = outputs[:, :-4, -1] # B, N
-    outputs = outputs[:, :-4, :-1] # B, N, 12
+    if outputs.shape[-1] == 15:
+        collision = outputs[:, :-4, -1] # B, N
+        gripper_open = outputs[:, :-4, -2] # B, N
+        weights = outputs[:, :-4, -3] # B, N
+        outputs = outputs[:, :-4, :-3] # B, N, 12
+    elif outputs.shape[-1] == 13:
+        weights = outputs[:, :-4, -1] # B, N
+        outputs = outputs[:, :-4, :-1] # B, N, 12
+
     B, N, _ = outputs.shape
     outputs = outputs.view(B, N, 4, 3)
-    outputs = outputs + inputs[:,:-4,:].unsqueeze(2)
+    outputs = outputs + inputs[:,:-4,:3].unsqueeze(2)
     weights = torch.nn.functional.softmax(weights, dim=1)
     outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
     outputs = outputs.sum(dim=1)
     outputs = outputs.unsqueeze(1)
+
+    if collision is not None and gripper_open is not None:
+        gripper_open = torch.sigmoid(gripper_open)
+        collision = torch.sigmoid(collision)
+
+        gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
+        collision = (collision * weights).sum(dim=1, keepdim=True)
+        gripper_open = gripper_open.unsqueeze(1)
+        collision = collision.unsqueeze(1)
+
+        gripper_open = (gripper_open > 0.5).float()
+        collision = (collision > 0.5).float()
+
     if return_weights:
         return outputs, weights
-    return outputs
+    return outputs, gripper_open, collision
+
+def run_high_level_policy_binary_inference(policy, batch, return_weights=False, gripper_open=None, collision=None):
+    policy.eval()
+    pointcloud = batch['point_cloud'][:, -1, :, :]
+    gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
+
+    inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
+    inputs = inputs.to('cuda')
+    inputs_ = inputs.permute(0, 2, 1)
+    outputs = policy(inputs_)
+
+    collision = outputs [:, -1]
+    gripper_open = outputs [:, -2]
+
+    breakpoint()
+    gripper_open = torch.sigmoid(gripper_open)
+    collision = torch.sigmoid(collision)
+    breakpoint()
+    gripper_open = gripper_open.unsqueeze(1)
+    collision = collision.unsqueeze(1)
+
+    gripper_open = (gripper_open > 0.5).float()
+    collision = (collision > 0.5).float()
+
+    return gripper_open, collision
 
 def run_high_level_gmm_inference(policy, batch, return_weights=False, one_hot=False):
     pointcloud = batch['point_cloud'][:, -1, :, :]

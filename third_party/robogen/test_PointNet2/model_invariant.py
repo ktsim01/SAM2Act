@@ -459,7 +459,7 @@ class PointNet2_super(nn.Module):
         
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points) # (B, 3, 512) (B, 256, 512)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points) # (B, 3, 256) (B, 512, 256)
-        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points) # (B, 3, 128) (B, 1024, 16)
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points) # (B, 3, 128) (B, 1024, 128)
         l5_xyz, l5_points = self.sa5(l4_xyz, l4_points) # (B, 3, 64) (B , 1024, 64)
         l6_xyz, l6_points = self.sa6(l5_xyz, l5_points) # (B, 3, 16) (B, 1024, 16)
 
@@ -475,6 +475,71 @@ class PointNet2_super(nn.Module):
         x = self.conv2(x)
         # x = F.log_softmax(x, dim=1)
         x = x.permute(0, 2, 1)
+        return x # x shape: B, N, num_classes
+    
+
+class PointNet2_Binary(nn.Module):
+    def __init__(self, num_classes, input_channel=3, keep_gripper_in_fps=False, use_in=False):
+        super(PointNet2_Binary, self).__init__()
+        self.sa1 = PointNetSetAbstractionMsg(npoint=1024, radius_list=[0.025, 0.05], nsample_list=[16, 32], in_channel=input_channel - 3, mlp_list=[[16, 16, 32], [32, 32, 64]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa2 = PointNetSetAbstractionMsg(npoint=512, radius_list=[0.05, 0.1], nsample_list=[16, 32], in_channel=96, mlp_list=[[64, 64, 128], [64, 96, 128]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa3 = PointNetSetAbstractionMsg(256, [0.1, 0.2], [16, 32], 128+128, [[128, 196, 256], [128, 196, 256]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa4 = PointNetSetAbstractionMsg(128, [0.2, 0.4], [16, 32], 256+256, [[256, 256, 512], [256, 384, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa5 = PointNetSetAbstractionMsg(64, [0.4, 0.8], [16, 32], 512+512, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa6 = PointNetSetAbstractionMsg(16, [0.8, 1.6], [16, 32], 512+512, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        # self.fp6 = PointNetFeaturePropagation(512+512+512+512, [512, 512], use_in=use_in)
+        # self.fp5 = PointNetFeaturePropagation(512+512+256+256, [512, 512], use_in=use_in)
+        # self.fp4 = PointNetFeaturePropagation(1024, [256, 256], use_in=use_in)
+        # self.fp3 = PointNetFeaturePropagation(128+128+256, [256, 256], use_in=use_in)
+        # self.fp2 = PointNetFeaturePropagation(32+64+256, [256, 128], use_in=use_in)
+        # self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128], use_in=use_in)
+        # self.conv1 = nn.Conv1d(128, 128, 1)
+        # if use_in:
+        #     self.bn1 = nn.InstanceNorm1d(128)
+        # else:
+        #     self.bn1 = nn.BatchNorm1d(128)
+        # # self.drop1 = nn.Dropout(0.5)
+        # self.conv2 = nn.Conv1d(128, num_classes, 1)
+
+        self.binary_head = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2),  # Output: [gripper_state, ignore_collision]
+        )
+
+
+    def forward(self, xyz):
+        l0_points = xyz
+        l0_xyz = xyz[:, :3, :]
+        
+        if xyz.shape[1] > 3:
+            l1_xyz, l1_points = self.sa1(l0_xyz, xyz[:, 3:, :])
+        else:
+            l1_xyz, l1_points = self.sa1(l0_xyz, None) # (B, 3, 1024) (B, 96, 1024)
+        
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points) # (B, 3, 512) (B, 256, 512)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points) # (B, 3, 256) (B, 512, 256)
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points) # (B, 3, 128) (B, 1024, 128)
+        l5_xyz, l5_points = self.sa5(l4_xyz, l4_points) # (B, 3, 64) (B , 1024, 64)
+        l6_xyz, l6_points = self.sa6(l5_xyz, l5_points) # (B, 3, 16) (B, 1024, 16)
+
+        # Pass it through an mlp here
+        x = torch.max(l6_points, dim=2)[0]  # Global feature vector (B, 1024)
+        x = self.binary_head(x)  # (B, 2)
+
+        return x
+        # l5_points = self.fp6(l5_xyz, l6_xyz, l5_points, l6_points) # (B, 512, 64)
+        # l4_points = self.fp5(l4_xyz, l5_xyz, l4_points, l5_points) # (B, 512, 128)
+        # l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points) # (B, 256, 256)
+        # l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points) # (B, 256, 512)
+        # l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points) # (B, 128, 1024)
+        # l0_points = self.fp1(l0_xyz, l1_xyz, None, l1_points) # (B, 128, num_point)
+
+        # x = F.relu(self.bn1(self.conv1(l0_points)))
+        # # x = F.relu(self.conv1(l0_points))
+        # x = self.conv2(x)
+        # # x = F.log_softmax(x, dim=1)
+        # x = x.permute(0, 2, 1)
         return x # x shape: B, N, num_classes
         
 class PointNet2_superplus(nn.Module):

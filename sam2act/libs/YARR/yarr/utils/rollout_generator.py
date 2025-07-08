@@ -21,7 +21,10 @@ class RolloutGenerator(object):
                   episode_length: int, timesteps: int,
                   eval: bool, eval_demo_seed: int = 0,
                   record_enabled: bool = False,
-                  replay_ground_truth: bool = False):            
+                  replay_ground_truth: bool = False,
+                  high_level_policy=None,
+                    binary_high_level=None,
+                  rollout_articubot=False):            
         
         if eval:
             obs = env.reset_to_demo(eval_demo_seed)
@@ -35,9 +38,12 @@ class RolloutGenerator(object):
         for step in range(episode_length):
 
             prepped_data = {k:torch.tensor(np.array([v]), device=self._env_device) for k, v in obs_history.items()}
-            if not replay_ground_truth:
+            if not replay_ground_truth and not rollout_articubot:
                 act_result = agent.act(step_signal.value, prepped_data,
                                     deterministic=eval)
+            elif rollout_articubot and high_level_policy is not None:
+                act_result = agent.act_with_articubot(step_signal.value, prepped_data,
+                                    deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level)
             else:
                 if step >= len(actions):
                     return
