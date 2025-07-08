@@ -61,5 +61,5 @@ torchrun --standalone --nproc_per_node=$NP train_ddp_weighted_displacement.py \
     --use_gripper_open \
     --use_collision \
     --add_one_hot_encoding 1 \
-    --using_weight 0 
+    --using_weight 0 \
 #    --use_color \

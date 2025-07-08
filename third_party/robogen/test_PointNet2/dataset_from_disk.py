@@ -8,10 +8,9 @@ import numpy as np
 from tqdm import tqdm
 import pickle
 import random
-
 class PointNetDatasetFromDisk(torch.utils.data.Dataset):
     def __init__(self, all_obj_paths, beg_ratio=0, end_ratio=0.9, eval_episode=None, only_first_stage=False, is_pickle=False, use_all_data=False, 
-                 conditioning_on_demo=False, n_obs_steps=1):
+                 conditioning_on_demo=False, n_obs_steps=1, use_color=False, episodes_to_exclude=None, only_use_episodes=None):
         self.all_obj_paths = all_obj_paths
         self.beg_ratio = beg_ratio
         self.end_ratio = end_ratio
@@ -19,6 +18,7 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
         self.use_all_data = use_all_data
         self.conditioning_on_demo = conditioning_on_demo
         self.n_obs_steps = n_obs_steps
+        self.use_color = use_color
         if only_first_stage:
             cprint('======= ONLY FIRST STAGE =======', 'red')
 
@@ -42,6 +42,14 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
             all_subfolder = sorted(all_subfolder)
             beg = int(beg_ratio * len(all_subfolder))
             end = int(end_ratio * len(all_subfolder))
+            if episodes_to_exclude is not None:
+                all_subfolder = [s for s in all_subfolder if s not in episodes_to_exclude]
+                cprint(f'MINO excluding episodes {episodes_to_exclude}', 'red')
+                cprint(f'MINO subfolder length {len(all_subfolder)}', 'red')
+            elif only_use_episodes is not None:
+                all_subfolder = only_use_episodes
+                cprint(f'MINO only use episodes {all_subfolder}', 'red')
+                cprint(f'MINO validation episodes {len(all_subfolder)}', 'red')
             if not self.use_all_data:
                 end = min(end, 75)
             if eval_episode is not None:
@@ -121,8 +129,6 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
 
             if not only_first_stage and eval_episode is None:
                 self.episode_lengths.append(len(all_substeps))
-                
-        # exit()
 
         self.episode_lengths = np.array(self.episode_lengths)
         self.accumulated_episode_lengths = np.cumsum(self.episode_lengths)
@@ -597,3 +603,65 @@ def get_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_ratio=0.9, eval
         dataset = PredictTwoGoalsDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, is_pickle=True, 
                                                  use_all_data=use_all_data)
     return dataset
+
+
+def get_train_and_val_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_ratio=0.9, eval_episode=None, only_first_stage=False, 
+                                            use_all_data=False, use_combined_action=False, dataset_prefix=None, num_train_objects=200, 
+                                            predict_two_goals=False, conditioning_on_demo=False, n_obs_steps=1, use_color=False,
+                                            num_demos_in_val=10):
+                    
+    if dataset_prefix is None:
+        dataset_prefix='/scratch/chialiang/dp3_demo'
+        if use_combined_action:
+            dataset_prefix='/scratch/chialiang/dp3_demo_combine_2_new'
+    
+    if all_obj_paths is None:
+        print("num_train_objects: ", num_train_objects)
+        if num_train_objects == 'square_D0':
+            all_obj_paths = ['/scratch/minon/articubot_abs']
+        elif num_train_objects == 'square_D0_new':
+            all_obj_paths = ['/scratch/minon/articubot_abs_cleaned_4000']
+        elif num_train_objects == 'square_d2_abs':
+            all_obj_paths = ['/scratch/minon/square_d2_abs']
+        elif num_train_objects == 'three_piece_assembly_d2_abs':
+            all_obj_paths = ['/scratch/minon/three_piece_assembly_d2_abs']
+        elif num_train_objects == 'threading_d2_abs':
+            all_obj_paths = ['/scratch/minon/threading_d2_abs']
+        elif num_train_objects == 'coffee_d2_abs':
+            all_obj_paths = ['/scratch/minon/coffee_d2_abs']
+        elif num_train_objects == 'hammer_cleanup_d1_abs':
+            all_obj_paths = ['/scratch/minon/hammer_cleanup_d1_abs']
+        elif num_train_objects == 'stack_d1_abs':
+            all_obj_paths = ['/scratch/minon/stack_d1_abs']
+        elif num_train_objects == 'stack_three_d1_abs':
+            all_obj_paths = ['/scratch/minon/stack_three_d1_abs']
+        elif num_train_objects == 'mug_cleanup_d1_abs':
+            all_obj_paths = ['/scratch/minon/mug_cleanup_d1_abs']
+        elif num_train_objects == 'kitchen_d1_abs':
+            all_obj_paths = ['/scratch/minon/kitchen_d1_abs']
+        elif num_train_objects == 'nut_assembly_d0_abs':
+            all_obj_paths = ['/scratch/minon/nut_assembly_d0_abs']
+        elif num_train_objects == 'pick_place_d0_abs':
+            all_obj_paths = ['/scratch/minon/pick_place_d0_abs']
+        elif num_train_objects == 'coffee_preparation_d1_abs':
+            all_obj_paths = ['/scratch/minon/coffee_preparation_d1_abs']
+        elif num_train_objects == 'put_money_in_safe':
+            all_obj_paths = ['/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_articubot']
+        else:
+            raise ValueError(f'num_train_objects {num_train_objects} not supported')
+        
+        # episodes_for_val = [f'episode_{i}' for i in np.random.randint(low=0, high=1000, size=num_demos_in_val)]
+        episodes_for_val = ['episode_0', 'episode_1', 'episode_2', 'episode_3', 'episode_4', 'episode_5', 'episode_6', 'episode_7', 'episode_8', 'episode_9']  
+        cprint(f'initial validation episodes {episodes_for_val}')
+    if not predict_two_goals:
+            train_dataset = PointNetDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, 
+                                            is_pickle=True, use_all_data=use_all_data, conditioning_on_demo=conditioning_on_demo,
+                                            n_obs_steps=n_obs_steps, use_color=use_color, episodes_to_exclude=episodes_for_val)
+            val_dataset = PointNetDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, 
+                                            is_pickle=True, use_all_data=use_all_data, conditioning_on_demo=conditioning_on_demo,
+                                            n_obs_steps=n_obs_steps, use_color=use_color, only_use_episodes=episodes_for_val)
+            return train_dataset, val_dataset
+    else:
+        dataset = PredictTwoGoalsDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, is_pickle=True, 
+                                                 use_all_data=use_all_data)
+        return dataset

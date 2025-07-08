@@ -280,15 +280,14 @@ def run_high_level_policy_binary_inference(policy, batch, return_weights=False, 
     inputs_ = inputs.permute(0, 2, 1)
     outputs = policy(inputs_)
 
-    collision = outputs [:, -1]
-    gripper_open = outputs [:, -2]
+    collision = outputs [:, -1] # B
+    gripper_open = outputs [:, -2] # B
 
-    breakpoint()
     gripper_open = torch.sigmoid(gripper_open)
     collision = torch.sigmoid(collision)
-    breakpoint()
-    gripper_open = gripper_open.unsqueeze(1)
-    collision = collision.unsqueeze(1)
+
+    # gripper_open = gripper_open.unsqueeze(1)
+    # collision = collision.unsqueeze(1)
 
     gripper_open = (gripper_open > 0.5).float()
     collision = (collision > 0.5).float()
