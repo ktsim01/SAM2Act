@@ -24,31 +24,22 @@ def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
 
-    if args.use_color:
-        input_channel = 6
-    elif args.add_one_hot_encoding:
-        input_channel = 5
-    else:
-        input_channel = 3
+    input_channel = 6 if args.use_color else 5
 
-    if args.use_gripper_open and args.use_collision: 
-        output_dim = 3 # weights, gripper, and collision
-    else: output_dim = 13 # 4 gripper points, 3 coordinates each, and weights
+    if not args.predict_two_goals: output_dim = 3 # 4 gripper points, 3 coordinates each, weights, gripper, and collision
+    else: output_dim = 25
 
     if args.model_invariant:
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_small2
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_superplus
-        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_Binary
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_large':
             model = PointNet2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_super':
             model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
-        elif args.model_type == 'pointnet2_binary':
-            model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'attn':
             model = AttnModel(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_superplus':
@@ -151,7 +142,6 @@ def train(args):
                     "model_type": args.model_type,
                     "lr": args.lr,
                     "weight_loss_weight": args.weight_loss_weight,
-                    "gripper_collision_loss_weight": args.gripper_collision_loss_weight,
                     "batch_size": args.batch_size
                 }
             )
@@ -165,12 +155,25 @@ def train(args):
                     f.write(f"{key}: {value}\n")
 
     print("trying to load dataset")
+    # dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
+    #                                   end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
+    #                                   use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
+    #                                   dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
+    #                                   predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps)
+    # dataloader = DataLoader(dataset, 
+    #             shuffle=False,
+    #             sampler=DistributedSampler(dataset),
+    #             batch_size=args.batch_size,
+    #             num_workers=2,
+    #             pin_memory=True,
+    #             )
+
     train_dataset, val_dataset = get_train_and_val_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
-                                      end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
-                                      use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
-                                      dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps,
-                                      use_color=args.use_color)
+                                    end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
+                                    use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
+                                    dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
+                                    predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps,
+                                    use_color=args.use_color)
     train_dataloader = DataLoader(train_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(train_dataset),
@@ -187,7 +190,6 @@ def train(args):
                 pin_memory=True,
                 )
 
-
     global_step = 0
 
     for epoch in range(args.num_epochs):
@@ -196,6 +198,7 @@ def train(args):
         accumulated_weighting_loss = 0.0
         accumulated_gripper_loss = 0.0
         accumulated_collision_loss = 0.0
+
         for i, data in enumerate(tqdm(train_dataloader)):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
@@ -210,8 +213,6 @@ def train(args):
             
             if args.use_color:
                 gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
-            else:
-                pointcloud = pointcloud[..., :3]
 
             gripper_points = goal_gripper_pcd
 
@@ -235,66 +236,23 @@ def train(args):
             else:
                 inputs = pointcloud
 
-            labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-            B, N, _, _ = labels.shape
-            labels = labels.view(B, N, -1) # B, N, 12
+            # labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+            # B, N, _, _ = labels.shape
+            # labels = labels.view(B, N, -1) # B, N, 12
 
-            inputs, labels = inputs.to(device), labels.to(device)
+            # inputs, labels = inputs.to(device), labels.to(device)
+            inputs = inputs.to(device)
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
+            outputs = model(inputs) # B, N, 15
+            weights = outputs[:, :, 0]
+            gripper_open = outputs[:, :, 1] # B, N
+            collision = outputs[:, :, 2] # B, N
 
-            if args.use_gripper_open and args.use_collision:
-                outputs = model(inputs) # B, 2
-                weights = outputs[:, :, 0] # B, N
-                gripper_open = outputs[:, :, 1] # B, N
-                collision = outputs[:, :, 2] # B, N
+            # loss = criterion(outputs, labels)
+            # accumulated_displacement_loss += loss.item()
 
-                # Softmax weights
-                weights = torch.nn.functional.softmax(weights, dim=1)
-                loss = 0.0
-
-                gripper_open = (gripper_open * weights).sum(dim=1)
-                collision = (collision * weights).sum(dim=1)
-
-                loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
-                loss = loss + loss_gripper * args.weight_loss_weight
-                accumulated_gripper_loss += (loss_gripper * args.weight_loss_weight).item()
-
-                loss_collision = bce_loss(collision, collision_gt.to(device))
-                loss = loss + loss_collision * args.weight_loss_weight
-                accumulated_collision_loss += (loss_collision * args.weight_loss_weight).item()
-
-                accumulated_weighting_loss += loss.item()
-
-                
-                # gripper_open = outputs[:, -2] # B, 2
-                # collision = outputs[:, -1] # B, 2
-                # # Gripper open/close and collision losses
-                # loss = 0.0
-                # loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
-                # loss = loss + loss_gripper * args.gripper_collision_loss_weight
-                # accumulated_gripper_loss += (loss_gripper * args.gripper_collision_loss_weight).item()
-
-                # loss_collision = bce_loss(collision, collision_gt.to(device))
-                # loss = loss + loss_collision * args.gripper_collision_loss_weight
-                # accumulated_collision_loss += (loss_collision * args.gripper_collision_loss_weight).item()
-    
-            else:
-                outputs = model(inputs) # B, N, 15
-                # collision = outputs[:, :, -1] # B, N
-                # gripper_open = outputs[:, :, -2] # B, N
-                weights = outputs[:, :, -1] # B, N
-                outputs = outputs[:, :, :-1] # B, N, 12
-
-                if args.output_obj_pcd_only:
-                    weights = weights[:, :-4]
-                    outputs = outputs[:, :-4, :]
-                    labels = labels[:, :-4, :]
-                    inputs = inputs[:, :, :-4]
-                    N = N - 4
-
-                loss = criterion(outputs, labels)
-                accumulated_displacement_loss += loss.item()
+            loss = 0.0
 
             if args.using_weight:
                 inputs = inputs.permute(0, 2, 1)
@@ -315,9 +273,76 @@ def train(args):
                 loss = loss + avg_loss * args.weight_loss_weight
                 accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
 
+            # Gripper open/close and collision losses
+            
+            if args.use_gripper_open and args.use_collision:
+                weights = torch.nn.functional.softmax(weights, dim=1)
+                gripper_open = (gripper_open * weights).sum(dim=1)
+                collision = (collision * weights).sum(dim=1)
+
+                loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
+                loss = loss + loss_gripper * args.weight_loss_weight
+                accumulated_gripper_loss += (loss_gripper * args.weight_loss_weight).item()
+
+                loss_collision = bce_loss(collision, collision_gt.to(device))
+                loss = loss + loss_collision * args.weight_loss_weight
+                accumulated_collision_loss += (loss_collision * args.weight_loss_weight).item()
+    
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+
+            if (epoch) % 5 == 0:
+                gripper_val_accuracy = 0.0
+                collision_val_accuracy = 0.0
+
+                for i, data in enumerate(tqdm(val_dataloader)):
+                    pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
+                    gripper_points = goal_gripper_pcd
+
+                    pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
+
+                    pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
+                    pointcloud_one_hot[:, :, 0] = 1
+                    pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
+                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+                    gripper_pcd_one_hot[:, :, 1] = 1
+                    gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+                    inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
+
+                    labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+                    B, N, _, _ = labels.shape
+                    labels = labels.view(B, N, -1) # B, N, 12
+
+                    inputs, labels = inputs.to(device), labels.to(device)
+                    inputs = inputs.permute(0, 2, 1)
+                    with torch.no_grad():
+                        outputs = model(inputs) # B, N, 13
+
+                    weights = outputs[:, :, 0] # B, N
+                    gripper_open = outputs[:, :, 1] # B, N
+                    collision = outputs[:, :, 2] # B, N
+
+                    # gripper_open = outputs[:, -2] # B, 2
+                    # collision = outputs[:, -1] # B, 2
+
+                    # softmax the weights
+                    weights = torch.nn.functional.softmax(weights, dim=1)
+
+                    gripper_open = (gripper_open * weights).sum(dim=1)
+                    collision = (collision * weights).sum(dim=1)
+
+                    gripper_open = torch.sigmoid(gripper_open)
+                    collision = torch.sigmoid(collision)
+
+                    gripper_open = (gripper_open > 0.5).float()
+                    collision = (collision > 0.5).float()
+
+                    # Gripper open/close and collision losses
+                    gripper_val_accuracy += (gripper_open == gripper_open_gt.to(device)).sum().item()
+
+                    collision_val_accuracy += (collision == collision_gt.to(device)).sum().item()
+
 
             if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
                 print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
@@ -326,7 +351,7 @@ def train(args):
                     "epoch": epoch + 1,
                     "global_step": global_step,
                     "total_loss": running_loss / 1000,
-                    # "displacement_loss": accumulated_displacement_loss / 1000,
+                    "displacement_loss": accumulated_displacement_loss / 1000,
                     "weighting_loss": accumulated_weighting_loss / 1000,
                     "gripper_loss": accumulated_gripper_loss / 1000,
                     "collision_loss": accumulated_collision_loss / 1000,
@@ -337,106 +362,12 @@ def train(args):
                     wandb_run.log(log_info, step=global_step)
 
                 running_loss = 0.0
-                # accumulated_displacement_loss = 0.0
+                accumulated_displacement_loss = 0.0
                 accumulated_weighting_loss = 0.0
                 accumulated_gripper_loss = 0.0
                 accumulated_collision_loss = 0.0
 
             global_step += 1
-
-        
-        if (epoch + 1) % 5 == 0:
-            gripper_val_accuracy = 0.0
-            collision_val_accuracy = 0.0
-
-            total = 0
-
-            for i, data in enumerate(tqdm(val_dataloader)):
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
-                gripper_points = goal_gripper_pcd
-
-                pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
-
-                pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
-                pointcloud_one_hot[:, :, 0] = 1
-                pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
-                gripper_pcd_one_hot[:, :, 1] = 1
-                gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
-                inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
-
-                labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-                B, N, _, _ = labels.shape
-                labels = labels.view(B, N, -1) # B, N, 12
-
-                inputs, labels = inputs.to(device), labels.to(device)
-                inputs = inputs.permute(0, 2, 1)
-                with torch.no_grad():
-                    outputs = model(inputs) # B, N, 13
-
-                weights = outputs[:, :, 0] # B, N
-                gripper_open = outputs[:, :, 1] # B, N
-                collision = outputs[:, :, 2] # B, N
-
-                # gripper_open = outputs[:, -2] # B, 2
-                # collision = outputs[:, -1] # B, 2
-
-                # softmax the weights
-                weights = torch.nn.functional.softmax(weights, dim=1)
-
-                gripper_open = (gripper_open * weights).sum(dim=1)
-                collision = (collision * weights).sum(dim=1)
-
-                gripper_open = torch.sigmoid(gripper_open)
-                collision = torch.sigmoid(collision)
-
-                gripper_open = (gripper_open > 0.5).float()
-                collision = (collision > 0.5).float()
-
-                # Gripper open/close and collision losses
-                gripper_val_accuracy += (gripper_open == gripper_open_gt.to(device)).sum().item()
-
-                collision_val_accuracy += (collision == collision_gt.to(device)).sum().item()
-
-                # weights = outputs[:, :, -1] # B, N
-                # outputs = outputs[:, :, :-1] # B, N, 12
-
-                # if args.using_weight:
-                #     inputs = inputs.permute(0, 2, 1)
-                #     if not args.predict_two_goals:
-                #         outputs = outputs.view(B, N, 4, 3)
-                #     else:
-                #         outputs = outputs.view(B, N, 8, 3)
-                #     outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
-
-                #     # softmax the weights
-                #     weights = torch.nn.functional.softmax(weights, dim=1)
-                    
-                #     # sum the displacement of the predicted gripper point cloud according to the weights
-                #     outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                #     outputs = outputs.sum(dim=1)
-                #     accumulated_val_loss += criterion(outputs, gripper_points.to(device)).item()
-
-            if os.environ['LOCAL_RANK'] == '0':
-                    print(f"Epoch {epoch + 1}, gripper_val_accuracy: {gripper_val_accuracy / len(val_dataloader.dataset)}, collision_val_accuracy: {collision_val_accuracy / len(val_dataloader.dataset)}")
-
-                    log_info = {
-                        "epoch": epoch + 1,
-                        "global_step": global_step,
-                        "gripper_val_accuracy": gripper_val_accuracy / len(val_dataloader.dataset),
-                        "collision_val_accuracy": collision_val_accuracy / len(val_dataloader.dataset),
-                    }
-
-                    if args.wandb:
-                        wandb_run.log(log_info, step=global_step)
-
-                    # if accumulated_val_loss < min_val_loss:
-                    #     min_val_loss = accumulated_val_loss
-                    #     if os.environ['LOCAL_RANK'] == '0':
-                    #         save_path = f"{args.exp_path}/best_model.pth"
-                    #         torch.save(model.module.state_dict(), save_path)
-                    #         print(f"Saved best model to {save_path}")
-                    # accumulated_val_loss = 0.0
 
         if (epoch + 1) % args.save_freq == 0 and os.environ['LOCAL_RANK'] == '0':
             save_path = f"{args.exp_path}/model_{epoch + 1}.pth"
@@ -462,7 +393,6 @@ def parse_args():
     parser.add_argument('--load_model_path', type=str, default=None)
     parser.add_argument('--output_obj_pcd_only', action='store_true')
     parser.add_argument('--weight_loss_weight', type=float, default=10)
-    parser.add_argument('--gripper_collision_loss_weight', type=float, default=1)
     parser.add_argument('--use_all_data', action='store_true')
     parser.add_argument('--use_combined_action', action='store_true')
     parser.add_argument('--model_invariant', action='store_true')
@@ -476,7 +406,7 @@ def parse_args():
     parser.add_argument('--use_gripper_open', action='store_true')
     parser.add_argument('--use_collision', action='store_true')
     parser.add_argument('--use_color', action='store_true')
-    parser.add_argument('--wandb', action='store_true', help="Whether to use wandb for logging")
+    parser.add_argument('--wandb', action='store_true', help='Whether to use wandb for logging')
 
 
     return parser.parse_args()
