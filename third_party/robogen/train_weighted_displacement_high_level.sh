@@ -40,7 +40,7 @@ TASK="put_money_in_safe"
 #     exit 1
 # fi
 
-NP=2
+NP=1
 BS=50
 EPOCHS=100
 EXP_PATH=/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps

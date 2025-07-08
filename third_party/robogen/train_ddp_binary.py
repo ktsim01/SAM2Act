@@ -213,6 +213,8 @@ def train(args):
             
             if args.use_color:
                 gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+            else:
+                pointcloud = pointcloud[..., :3]
 
             gripper_points = goal_gripper_pcd
 
@@ -236,8 +238,8 @@ def train(args):
             else:
                 inputs = pointcloud
 
-            # labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-            # B, N, _, _ = labels.shape
+            labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+            B, N, _, _ = labels.shape
             # labels = labels.view(B, N, -1) # B, N, 12
 
             # inputs, labels = inputs.to(device), labels.to(device)
@@ -253,25 +255,6 @@ def train(args):
             # accumulated_displacement_loss += loss.item()
 
             loss = 0.0
-
-            if args.using_weight:
-                inputs = inputs.permute(0, 2, 1)
-                if not args.predict_two_goals:
-                    outputs = outputs.view(B, N, 4, 3)
-                else:
-                    outputs = outputs.view(B, N, 8, 3)
-                outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
-
-                # softmax the weights
-                weights = torch.nn.functional.softmax(weights, dim=1)
-                
-                # sum the displacement of the predicted gripper point cloud according to the weights
-                outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                outputs = outputs.sum(dim=1)
-                avg_loss = criterion(outputs, gripper_points.to(device))
-
-                loss = loss + avg_loss * args.weight_loss_weight
-                accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
 
             # Gripper open/close and collision losses
             

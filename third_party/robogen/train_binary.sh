@@ -49,7 +49,7 @@ DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/data/put_money_in_safe_articubot
 echo ${DATASET_PREFIX}/${TASK,,}/
 echo _${TASK}
 cd third_party/robogen/
-torchrun --standalone --nproc_per_node=$NP train_ddp_weighted_displacement.py \
+torchrun --standalone --nproc_per_node=$NP train_ddp_binary.py \
     --batch_size $BS \
     --num_epochs $EPOCHS \
     --model_type pointnet2_super --model_invariant \
@@ -58,7 +58,6 @@ torchrun --standalone --nproc_per_node=$NP train_ddp_weighted_displacement.py \
     --dataset_prefix ${DATASET_PREFIX} \
     --exp_name _${TASK} \
     --use_all_data \
-    --use_color \
     --use_gripper_open \
     --use_collision \
     --add_one_hot_encoding 1 \
