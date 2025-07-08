@@ -247,6 +247,8 @@ def train(args):
                 gripper_open = outputs[:, :, 1] # B, N
                 collision = outputs[:, :, 2] # B, N
 
+                # Softmax weights
+                weights = torch.nn.functional.softmax(weights, dim=1)
                 loss = 0.0
 
                 gripper_open = (gripper_open * weights).sum(dim=1)
