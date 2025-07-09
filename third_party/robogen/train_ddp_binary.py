@@ -306,7 +306,7 @@ def train(args):
 
             global_step += 1
             
-        if (epoch) % 5 == 0:
+        if (epoch + 1) % 5 == 0:
                 gripper_val_accuracy = 0.0
                 collision_val_accuracy = 0.0
 

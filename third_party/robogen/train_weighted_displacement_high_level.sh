@@ -52,14 +52,10 @@ cd third_party/robogen/
 torchrun --standalone --nproc_per_node=$NP train_ddp_weighted_displacement.py \
     --batch_size $BS \
     --num_epochs $EPOCHS \
-    --model_type pointnet2_binary --model_invariant \
+    --model_type pointnet2_super --model_invariant \
     --exp_path $EXP_PATH \
     --num_train_objects $TASK \
     --dataset_prefix ${DATASET_PREFIX} \
     --exp_name _${TASK} \
     --use_all_data \
-    --use_gripper_open \
-    --use_collision \
-    --add_one_hot_encoding 1 \
-    --using_weight 0 \
-#    --use_color \
+    --use_color \
