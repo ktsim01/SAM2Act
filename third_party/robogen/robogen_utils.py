@@ -214,9 +214,10 @@ def load_high_level_weighted_displacement_policy():
     return pointnet2_model
 
 def load_high_level_binary_prediction():
-    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
+    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-08_use_all_data_put_money_in_safe-obj_one_hot_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_Binary(num_classes=2, input_channel=5, use_in=False).to('cuda')
+    pointnet2_model = PointNet2_Binary(num_classes=3, input_channel=5, use_in=False).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -279,18 +280,23 @@ def run_high_level_policy_binary_inference(policy, batch, return_weights=False, 
     inputs = inputs.to('cuda')
     inputs_ = inputs.permute(0, 2, 1)
     outputs = policy(inputs_)
-
-    collision = outputs [:, -1] # B
-    gripper_open = outputs [:, -2] # B
+    
+    weights = outputs[:, :-4, 0]
+    gripper_open = outputs [:, :-4, 1] # B
+    collision = outputs [:, :-4, 2] # B
+    weights = torch.nn.functional.softmax(weights, dim=1)
 
     gripper_open = torch.sigmoid(gripper_open)
     collision = torch.sigmoid(collision)
 
-    # gripper_open = gripper_open.unsqueeze(1)
-    # collision = collision.unsqueeze(1)
+    gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
+    collision = (collision * weights).sum(dim=1, keepdim=True)
 
     gripper_open = (gripper_open > 0.5).float()
     collision = (collision > 0.5).float()
+
+    # gripper_open = gripper_open.unsqueeze(1)
+    # collision = collision.unsqueeze(1)
 
     return gripper_open, collision
 
