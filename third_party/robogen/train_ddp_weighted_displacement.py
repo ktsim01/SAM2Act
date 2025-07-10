@@ -303,6 +303,8 @@ def train(args):
 
         
         if (epoch + 1) % 5 == 0:
+            accumulated_val_loss = 0.0
+            
             for i, data in enumerate(tqdm(val_dataloader)):
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
                 gripper_points = goal_gripper_pcd
