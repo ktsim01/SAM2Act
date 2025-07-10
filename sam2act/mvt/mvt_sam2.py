@@ -89,6 +89,7 @@ class MVT_SAM2(nn.Module):
         ifsep,
         resize_rgb,
         rank,
+        articubot,
         sam2_config,
         sam2_ckpt,
         use_memory,

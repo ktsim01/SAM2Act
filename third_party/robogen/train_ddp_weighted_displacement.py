@@ -307,15 +307,20 @@ def train(args):
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
                 gripper_points = goal_gripper_pcd
 
-                pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
+                if not args.use_color:
+                    pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
 
-                pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
-                pointcloud_one_hot[:, :, 0] = 1
-                pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
-                gripper_pcd_one_hot[:, :, 1] = 1
-                gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
-                inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
+                if args.add_one_hot_encoding:
+                    pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
+                    pointcloud_one_hot[:, :, 0] = 1
+                    pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
+                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+                    gripper_pcd_one_hot[:, :, 1] = 1
+                    gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+                elif args.use_color:
+                    gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+
+                inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
 
                 labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
                 B, N, _, _ = labels.shape

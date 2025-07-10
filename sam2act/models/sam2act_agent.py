@@ -988,13 +988,13 @@ class SAM2Act_Agent:
 
         obs_dict = _get_articubot_dataset(observation, add_one_hot=True)
 
-        gripper_open, collision = ru.run_high_level_policy_binary_inference(binary_high_level, obs_dict)
+        gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, binary_prediction=True)
 
         obs_dict['point_cloud'] = obs_dict['point_cloud'][..., :3]
         obs_dict['gripper_pcd'] = obs_dict['gripper_pcd'][..., :3]
 
         subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict,
-                                                                        return_weights=True)
+                                                                        return_weights=True, binary_prediction=False)
         
 
         # pc, img_feat = rvt_utils.get_pc_img_feat(

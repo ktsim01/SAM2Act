@@ -205,19 +205,21 @@ def get_goal_gripper_pos_eefs(actions, eef_pos, eef_quat, eef_qpos, closed_thres
 def load_high_level_weighted_displacement_policy():
     # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
-    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
-    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
+    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_super(num_classes=15, input_channel=6, use_in=False).to('cuda')
+    pointnet2_model = PointNet2_super(num_classes=13, input_channel=3, use_in=False).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
 
 def load_high_level_binary_prediction():
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
-    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-08_use_all_data_put_money_in_safe-obj_one_hot_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-08_use_all_data_put_money_in_safe-obj_one_hot_use_gripper_open_use_collision_put_money_in_safe/model_100.pth' # weights
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-09_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth'
+    # load_model_path = '/home/ktsim/checkpoints/best_model.pth'
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_Binary(num_classes=3, input_channel=5, use_in=False).to('cuda')
+    pointnet2_model = PointNet2_super(num_classes=15, input_channel=6, use_in=False).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -229,7 +231,7 @@ def load_high_level_gmm_policy(epoch=30):
     pointnet2_model.eval()
     return pointnet2_model
 
-def run_high_level_policy_inference(policy, batch, return_weights=False, gripper_open=None, collision=None):
+def run_high_level_policy_inference(policy, batch, return_weights=False, binary_prediction=False):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
@@ -255,7 +257,7 @@ def run_high_level_policy_inference(policy, batch, return_weights=False, gripper
     outputs = outputs.sum(dim=1)
     outputs = outputs.unsqueeze(1)
 
-    if collision is not None and gripper_open is not None:
+    if binary_prediction:
         gripper_open = torch.sigmoid(gripper_open)
         collision = torch.sigmoid(collision)
 
@@ -267,14 +269,18 @@ def run_high_level_policy_inference(policy, batch, return_weights=False, gripper
         gripper_open = (gripper_open > 0.5).float()
         collision = (collision > 0.5).float()
 
+        return gripper_open, collision
+
     if return_weights:
         return outputs, weights
-    return outputs, gripper_open, collision
+    else:
+        return outputs
 
 def run_high_level_policy_binary_inference(policy, batch, return_weights=False, gripper_open=None, collision=None):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
+    # goal_gripper_pcd = batch['goal_gripper_pcd'][:, -1, :, :]
 
     inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
     inputs = inputs.to('cuda')
@@ -286,9 +292,13 @@ def run_high_level_policy_binary_inference(policy, batch, return_weights=False, 
     collision = outputs [:, :-4, 2] # B
     weights = torch.nn.functional.softmax(weights, dim=1)
 
+    gripper_open = outputs[:, 0]
+    collision = outputs[:, 1]
+
     gripper_open = torch.sigmoid(gripper_open)
     collision = torch.sigmoid(collision)
 
+    # Weighted average
     gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
     collision = (collision * weights).sum(dim=1, keepdim=True)
 
