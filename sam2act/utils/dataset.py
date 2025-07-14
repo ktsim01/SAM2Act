@@ -36,6 +36,7 @@ from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_bat
                           get_4_points_from_gripper_pos_orient
 
 from eval import load_agent
+from sam2act.libs.PyRep.pyrep.objects.vision_sensor import VisionSensor
 
 def create_replay(
     batch_size: int,
@@ -364,9 +365,55 @@ def _clip_encode_text(clip_model, text):
     x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ clip_model.text_projection
 
     return x, emb
+# add individual data points to a replay
+def _create_articubot_dataset(
+    obs, episode_num, sample_frame, key_frame_obs, action
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
+    
+    
+    front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+
+    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+
+    all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    np_points = all_pcd[rand_indx]
+    np_rgb = all_rgb[rand_indx]    
+
+    obj_pcd = o3d.geometry.PointCloud()
+    obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+
+    sampled_pcd = obj_pcd.farthest_point_down_sample(4500)
+
+    sampled_points = np.asarray(sampled_pcd.points)
+    sampled_rgb = np.asarray(sampled_pcd.colors)
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+
+    data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
+            'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+            'state': obs.get_low_dim_data()}
+    
+    if not os.path.exists('data/put_money_in_safe_articubot/' + folder_name):
+        os.makedirs('data/put_money_in_safe_articubot/' + folder_name)
+    
+    with open('data/put_money_in_safe_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
+        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
+        pickle.dump(data, f)
 
 # Create articubot dataset for each frame
-def _create_articubot_dataset(
+def _create_featurized_dataset(
     obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict
 ):
     # Construct point cloud
@@ -420,10 +467,15 @@ def _create_articubot_dataset(
 
     out = upsample[0](out) # 3, 32, 128, 128
 
-    front_point_cloud, front_feature = reproject_features_to_3d(out[0], obs_dict['front_depth'].reshape(-1, *obs_dict['front_depth'].shape[4:]), obs_dict['front_camera_intrinsics'].reshape(-1, *obs_dict['front_camera_intrinsics'].shape[3:])) # N, 32
-    left_point_cloud, left_feature = reproject_features_to_3d(out[1], obs_dict['left_shoulder_depth'].reshape(-1, *obs_dict['left_shoulder_depth'].shape[4:]), obs_dict['left_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_intrinsics'].shape[3:])) # N, 32
-    right_point_cloud, right_feature = reproject_features_to_3d(out[2], obs_dict['right_shoulder_depth'].reshape(-1, *obs_dict['right_shoulder_depth'].shape[4:]), obs_dict['right_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_intrinsics'].shape[3:])) # N, 32
+    breakpoint()
+    # front_point_cloud, front_feature = reproject_features_to_3d(out[0], obs_dict['front_depth'].reshape(-1, *obs_dict['front_depth'].shape[4:]), obs_dict['front_camera_intrinsics'].reshape(-1, *obs_dict['front_camera_intrinsics'].shape[3:])) # N, 32
+    # left_point_cloud, left_feature = reproject_features_to_3d(out[1], obs_dict['left_shoulder_depth'].reshape(-1, *obs_dict['left_shoulder_depth'].shape[4:]), obs_dict['left_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_intrinsics'].shape[3:])) # N, 32
+    # right_point_cloud, right_feature = reproject_features_to_3d(out[2], obs_dict['right_shoulder_depth'].reshape(-1, *obs_dict['right_shoulder_depth'].shape[4:]), obs_dict['right_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_intrinsics'].shape[3:])) # N, 32
+    front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs_dict['front_depth'].detach().cpu().numpy(),
+                                                                             obs_dict['left_shoulder_camera_extrinsics'].detach().cpu().numpy(),
+                                                                             obs_dict['left_shoulder_camera_intrinsics'].detach().cpu().numpy())
     
+    breakpoint()
     all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0).detach().cpu().numpy()
     all_features = torch.concat([front_feature, left_feature, right_feature], axis=0).detach().cpu().numpy()
 
@@ -937,7 +989,9 @@ def fill_articubot(
                 
                 obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
                 
-                _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+                # _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+                _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it
                 # while (

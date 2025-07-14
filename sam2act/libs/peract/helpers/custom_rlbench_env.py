@@ -227,6 +227,7 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         self._time_in_state = time_in_state
         self._record_every_n = record_every_n
         self._i = 0
+        self.high_level_prediction = None
         self._error_type_counts = {
             'IKError': 0,
             'ConfigurationPathError': 0,
@@ -269,7 +270,8 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         # obs.gripper_pose = grip_pose
         obs.joint_positions = joint_pos
         obs.gripper_pose = grip_pose
-        # obs_dict['gripper_pose'] = grip_pose
+        obs_dict['gripper_pose'] = grip_pose
+        obs_dict['gripper_joint_positions'] = obs.gripper_joint_positions
         return obs_dict
 
     def launch(self):
@@ -278,7 +280,7 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         if self.eval:
             cam_placeholder = Dummy('cam_cinematic_placeholder')
             cam_base = Dummy('cam_cinematic_base')
-            cam_base.rotate([0, 0, np.pi * 0.75])
+            cam_base.rotate([0, 0, np.pi * 0.5])
             self._record_cam = VisionSensor.create([320, 180])
             self._record_cam.set_explicit_handling(True)
             self._record_cam.set_pose(cam_placeholder.get_pose())
@@ -300,6 +302,16 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         if self._record_current_episode:
             self._record_cam.handle_explicitly()
             cap = (self._record_cam.capture_rgb() * 255).astype(np.uint8)
+            prediction_projected = self._record_cam.pixel_coords_from_pointcloud(self.high_level_prediction)
+            for x, y in prediction_projected:
+                for dx in [-1, 0, 1]:
+                    for dy in [-1, 0, 1]:
+                        xx, yy = x + dx, y + dy
+                        if 0 <= xx < cap.shape[1] and 0 <= yy < cap.shape[0]:
+                            cap[yy, xx] = [255, 0, 0]
+                # if x >= 0 and y >= 0 and x < cap.shape[1] and y < cap.shape[0]:
+                #     cap[y, x]= [255, 0, 0]  # Red dot for prediction
+
             self._recorded_images.append(cap)
 
     def _append_final_frame(self, success: bool):
@@ -311,8 +323,9 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         final_frames[:, :, :, 1 if success else 0] = 255
         self._recorded_images.extend(list(final_frames))
 
-    def step(self, act_result: ActResult) -> Transition:
+    def step(self, act_result: ActResult, predction=None) -> Transition:
         action = act_result.action
+        self.high_level_prediction = predction
         success = False
         obs = self._previous_obs_dict  # in case action fails.
 
@@ -387,5 +400,6 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
                 self.eval and self._episode_index % self._record_every_n == 0)
         self._episode_index += 1
         self._recorded_images.clear()
+        self.high_level_prediction = None
 
         return self._previous_obs_dict

@@ -6,6 +6,8 @@ from yarr.agents.agent import Agent
 from yarr.envs.env import Env
 from yarr.utils.transition import ReplayTransition
 from yarr.agents.agent import ActResult
+from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_batch, rotation_transfer_matrix_to_6D, \
+                          get_4_points_from_gripper_pos_orient
 
 class RolloutGenerator(object):
 
@@ -42,8 +44,16 @@ class RolloutGenerator(object):
                 act_result = agent.act(step_signal.value, prepped_data,
                                     deterministic=eval)
             elif rollout_articubot and high_level_policy is not None:
-                act_result = agent.act_with_articubot(step_signal.value, prepped_data,
-                                    deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level)
+                # points, quat, grip, act_result = agent.act(step_signal.value, prepped_data,
+                #                     deterministic=eval, visualize=True)
+                # # breakpoint()
+                # sam2 = get_4_points_from_gripper_pos_orient(points[0].detach().cpu().numpy(), quat[0], grip[0].detach().cpu().numpy())
+                
+                # act_result = agent.act_with_articubot(step_signal.value, prepped_data,
+                #                     deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level)
+                
+                act_result, predictions = agent.act_with_articubot(step_signal.value, prepped_data,
+                    deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level, return_high_level_prediction=True)
             else:
                 if step >= len(actions):
                     return
@@ -54,8 +64,7 @@ class RolloutGenerator(object):
                                act_result.observation_elements.items()}
             extra_replay_elements = {k: np.array(v) for k, v in
                                      act_result.replay_elements.items()}
-
-            transition = env.step(act_result)
+            transition = env.step(act_result, predictions if rollout_articubot else None)
             obs_tp1 = dict(transition.observation)
             timeout = False
             if step == episode_length - 1:

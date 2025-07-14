@@ -150,7 +150,46 @@ class VisionSensor(Object):
         intrinsics = self.get_intrinsic_matrix()
         return VisionSensor.pointcloud_from_depth_and_camera_params(
             depth, self.get_matrix(), intrinsics)
+    
+    def pixel_coords_from_pointcloud(self, pointcloud: np.ndarray) -> np.ndarray:
+        """
+        Projects a 3D point cloud (in world frame) into 2D pixel coordinates.
+        
+        :param pointcloud: A numpy array of shape (H, W, 3) or (N, 3) in world coordinates.
+        :param extrinsics: A 4x4 camera extrinsic matrix (world-to-camera).
+        :param intrinsics: A 3x3 camera intrinsic matrix.
+        :return: A numpy array of shape (N, 2) with 2D pixel coordinates (u, v).
+        """
+        pointcloud = pointcloud.squeeze(0).squeeze(0).detach().cpu().numpy()
 
+        # Reshape if needed
+        K = intrinsics = self.get_intrinsic_matrix()
+        extrinsics = self.get_matrix() # not actually extrinsics
+
+        C = np.expand_dims(extrinsics[:3, 3], 0).T
+        R = extrinsics[:3, :3]
+        R_inv = R.T  # inverse of rot matrix is transpose
+        R_inv_C = np.matmul(R_inv, C)
+        extrinsics = np.concatenate((R_inv, -R_inv_C), -1)
+
+        # Convert to homogeneous coordinates (N, 4)
+        ones = np.ones((pointcloud.shape[0], 1))
+        pointcloud_hom = np.concatenate([pointcloud, ones], axis=1).T  # (4, N)
+
+        # Transform world coordinates to camera coordinates
+        cam_coords_hom = extrinsics @ pointcloud_hom  # (4, N)
+        cam_coords = cam_coords_hom[:3, :]  # (3, N)
+
+        # Project to 2D using intrinsics
+        pixel_coords_hom = intrinsics @ cam_coords  # (3, N)
+
+        # breakpoint()
+        # Normalize to get pixel coordinates
+        pixel_coords = pixel_coords_hom[:2, :] / pixel_coords_hom[2:3, :]  # (2, N)
+        pixels = np.round(pixel_coords).astype(int)
+
+        return pixels.T.reshape(-1, 2)
+    
     @staticmethod
     def pointcloud_from_depth_and_camera_params(
             depth: np.ndarray, extrinsics: np.ndarray,
