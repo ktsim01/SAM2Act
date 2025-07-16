@@ -367,7 +367,7 @@ def _clip_encode_text(clip_model, text):
     return x, emb
 # add individual data points to a replay
 def _create_articubot_dataset(
-    obs, episode_num, sample_frame, key_frame_obs, action
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats
 ):
     folder_name = 'episode_' + str(episode_num)
     print(episode_num, sample_frame)
@@ -403,13 +403,16 @@ def _create_articubot_dataset(
     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
             'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
-            'state': obs.get_low_dim_data()}
+            'state': obs.get_low_dim_data(),
+            'lang_feats': lang_feats,}
     
-    if not os.path.exists('data/put_money_in_safe_articubot/' + folder_name):
-        os.makedirs('data/put_money_in_safe_articubot/' + folder_name)
+    directory = os.path.join('data', task + '_text_val', folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     
-    with open('data/put_money_in_safe_articubot/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
-        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving data to: ', final_path)
         pickle.dump(data, f)
 
 # Create articubot dataset for each frame
@@ -956,41 +959,50 @@ def fill_articubot(
                     articubot_dataset=True,
                 )
 
-                camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
+                # camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
                 # obs_config = peract_helper_utils.create_obs_config(CAMERAS, camera_resolution, method_name="", use_mask_from_replay=False)
 
-                obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
-                    obs,
-                    CAMERAS,
-                    t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
-                    prev_action=None,
-                    episode_length=25,
-                )
+                # obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
+                #     obs,
+                #     CAMERAS,
+                #     t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
+                #     prev_action=None,
+                #     episode_length=25,
+                # )
 
-                def reshape_dict_arrays_to_tensor(input_dict):
-                    """
-                    Converts every NumPy array in a dictionary to a PyTorch tensor
-                    with shape (1, 1, n), where n is the flattened size of the array.
+                # def reshape_dict_arrays_to_tensor(input_dict):
+                #     """
+                #     Converts every NumPy array in a dictionary to a PyTorch tensor
+                #     with shape (1, 1, n), where n is the flattened size of the array.
 
-                    Args:
-                        input_dict (dict): Dictionary with NumPy array values.
+                #     Args:
+                #         input_dict (dict): Dictionary with NumPy array values.
 
-                    Returns:
-                        dict: Dictionary with reshaped torch.Tensor values.
-                    """
-                    output_dict = {}
-                    for key, value in input_dict.items():
-                        if isinstance(value, np.ndarray):
-                            tensor = torch.tensor(value, dtype=torch.float32, device='cuda:0').unsqueeze(0).unsqueeze(0)
-                            output_dict[key] = tensor
-                        else:
-                            raise TypeError(f"Value for key '{key}' is not a NumPy array.")
-                    return output_dict
+                #     Returns:
+                #         dict: Dictionary with reshaped torch.Tensor values.
+                #     """
+                #     output_dict = {}
+                #     for key, value in input_dict.items():
+                #         if isinstance(value, np.ndarray):
+                #             tensor = torch.tensor(value, dtype=torch.float32, device='cuda:0').unsqueeze(0).unsqueeze(0)
+                #             output_dict[key] = tensor
+                #         else:
+                #             raise TypeError(f"Value for key '{key}' is not a NumPy array.")
+                #     return output_dict
                 
-                obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
-                
-                # _create_articubot_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
-                _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+                # obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
+
+                tokens = clip.tokenize([descs[0]]).numpy()
+                token_tensor = torch.from_numpy(tokens).to(device)
+                with torch.no_grad():
+                    lang_feats, lang_embs = _clip_encode_text(clip_model, token_tensor)
+
+                # lang_embs = lang_embs[0].float().detach().cpu().numpy()
+
+                lang_feats = lang_feats[0].float().detach().cpu().numpy()
+
+                _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats)
+                # _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
 
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it

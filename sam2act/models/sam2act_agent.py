@@ -973,16 +973,18 @@ class SAM2Act_Agent:
     def act_with_articubot(
         self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, binary_high_level=None, return_high_level_prediction=False
     ) -> ActResult:
-        # if self.add_lang:
-        #     lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
-        #     _, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
-        #     lang_goal_embs = lang_goal_embs.float()
-        # else:
-        #     lang_goal_embs = (
-        #         torch.zeros(observation["lang_goal_embs"].shape)
-        #         .float()
-        #         .to(self._device)
-        #     )
+        if self.add_lang:
+            lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
+            lang_goal_feats, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
+            lang_goal_embs = lang_goal_embs.float()
+            lang_goal_feats = lang_goal_feats.float()
+        else:
+            lang_goal_embs = (
+                torch.zeros(observation["lang_goal_embs"].shape)
+                .float()
+                .to(self._device)
+            )
+
 
         proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
 
@@ -992,68 +994,16 @@ class SAM2Act_Agent:
 
         gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, binary_prediction=True)
 
-        obs_dict['point_cloud'] = obs_dict['point_cloud'][..., :3]
-        obs_dict['gripper_pcd'] = obs_dict['gripper_pcd'][..., :3]
-
-        subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict,
+        subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
                                                                         return_weights=True, binary_prediction=False)
         
-        # pc, img_feat = rvt_utils.get_pc_img_feat(
-        #     obs,
-        #     pcd,
-        # )
-
-        # pc, img_feat = rvt_utils.move_pc_in_bound(
-        #     pc, img_feat, self.scene_bounds, no_op=not self.move_pc_in_bound
-        # )
-
-        # # TODO: Vectorize
-        # pc_new = []
-        # rev_trans = []
-        # for _pc in pc:
-        #     a, b = mvt_utils.place_pc_in_cube(
-        #         _pc,
-        #         with_mean_or_bounds=self._place_with_mean,
-        #         scene_bounds=None if self._place_with_mean else self.scene_bounds,
-        #     )
-        #     pc_new.append(a)
-        #     rev_trans.append(b)
-        # pc = pc_new
-
-        # bs = len(pc)
-        # nc = self._net_mod.num_img
-        # h = w = self._net_mod.img_size
-        # dyn_cam_info = None
-
-        # out = self._network(
-        #     pc=pc,
-        #     img_feat=img_feat,
-        #     proprio=proprio,
-        #     lang_emb=lang_goal_embs,
-        #     img_aug=0,  # no img augmentation while acting
-        # )
-        # _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
-        #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
-        # )
-        # pred_wpt, pred_rot_quat, pred_grip, pred_coll = self.get_pred(
-        #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
-        # )
-
         pred_wpt, pred_rot_quat = ru.get_gripper_pos_orient_from_4_points(subgoal_pred[:12].reshape(4,3).detach().cpu().numpy())
+
+        pred_grip = gripper_open
+        pred_coll = collision
 
         # print('Subgoal Pred:', subgoal_pred)
         # print('pred_wpt and pred_rot_quat:', pred_wpt, pred_rot_quat)
-
-        # if self.add_lang:
-        #     lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
-        #     _, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
-        #     lang_goal_embs = lang_goal_embs.float()
-        # else:
-        #     lang_goal_embs = (
-        #         torch.zeros(observation["lang_goal_embs"].shape)
-        #         .float()
-        #         .to(self._device)
-        #     )
 
         # proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
 
@@ -1100,9 +1050,6 @@ class SAM2Act_Agent:
         # _, _, pred_grip, pred_coll = self.get_pred(
         #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         # )
-
-        pred_grip = gripper_open
-        pred_coll = collision
 
         # import pickle
         # output = {'prediction': subgoal_pred, 'weights': weights, 'pointcloud': obs_dict['point_cloud']}

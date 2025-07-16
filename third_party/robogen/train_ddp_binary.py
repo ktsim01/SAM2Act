@@ -35,12 +35,17 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_superplus
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_Binary
+        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text
+        
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_large':
             model = PointNet2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_super':
-            model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
+            if args.use_text:
+                model = PointNet2_text(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+            else:
+                model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'pointnet2_binary':
             model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'attn':
@@ -171,25 +176,29 @@ def train(args):
     #             pin_memory=True,
     #             )
 
-    train_dataset, val_dataset = get_train_and_val_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
-                                    end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
-                                    use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
-                                    dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                    predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps,
-                                    use_color=args.use_color)
+    train_dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
+                                      end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
+                                      use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
+                                      dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False)
     train_dataloader = DataLoader(train_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(train_dataset),
                 batch_size=args.batch_size,
-                num_workers=4,
+                num_workers=2,
                 pin_memory=True,
                 )
-
+    
+    val_dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
+                                      end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
+                                      use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
+                                      dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=True)
     val_dataloader = DataLoader(val_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(val_dataset),
                 batch_size=args.batch_size,
-                num_workers=4,
+                num_workers=2,
                 pin_memory=True,
                 )
 
@@ -207,7 +216,7 @@ def train(args):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
             else:
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
+                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
 
             # inputs: B, N, 3
             # gripper_pcd: B, 4, 3
@@ -254,7 +263,7 @@ def train(args):
             inputs = inputs.to(device)
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
-            outputs = model(inputs) # B, N, 2
+            outputs = model(inputs, lang_feats) # B, N, 2
 
             collision = outputs[:, :, -1] # B, N
             gripper_open = outputs[:, :, -2] # B, N
@@ -334,7 +343,7 @@ def train(args):
                 accumulated_val_loss = 0.0
 
                 for i, data in enumerate(tqdm(val_dataloader)):
-                    pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt = data
+                    pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
                     gripper_points = goal_gripper_pcd
 
                     # Add one hot encodings
@@ -364,7 +373,7 @@ def train(args):
                     inputs, labels = inputs.to(device), labels.to(device)
                     inputs = inputs.permute(0, 2, 1)
                     with torch.no_grad():
-                        outputs = model(inputs) # B, N, 13
+                        outputs = model(inputs, lang_feats) # B, N, 13
 
                     # gripper_open = outputs[:, 0] # B, N
                     # collision = outputs[:, 1] # B, N
@@ -466,6 +475,7 @@ def parse_args():
     parser.add_argument('--use_gripper_open', action='store_true')
     parser.add_argument('--use_collision', action='store_true')
     parser.add_argument('--use_color', action='store_true')
+    parser.add_argument('--use_text', action='store_true', help='Whether to use text as input')
     parser.add_argument('--wandb', action='store_true', help='Whether to use wandb for logging')
 
 

@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
 from torch.utils.data import DataLoader
-from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary
+from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text
 from matplotlib import pyplot as plt
 import torch
 from termcolor import cprint
@@ -206,9 +206,13 @@ def load_high_level_weighted_displacement_policy():
     # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
-    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
+    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-10_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth'
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-15_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # Text embedding
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_super(num_classes=13, input_channel=3, use_in=False).to('cuda')
+    # pointnet2_model = PointNet2_super(num_classes=13, input_channel=6, use_in=False).to('cuda')
+    pointnet2_model = PointNet2_text(num_classes=13, input_channel=6, use_text_embedding=True).to('cuda')
+
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -231,7 +235,7 @@ def load_high_level_gmm_policy(epoch=30):
     pointnet2_model.eval()
     return pointnet2_model
 
-def run_high_level_policy_inference(policy, batch, return_weights=False, binary_prediction=False):
+def run_high_level_policy_inference(policy, batch, text_embedding=None, return_weights=False, binary_prediction=False):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
@@ -239,7 +243,11 @@ def run_high_level_policy_inference(policy, batch, return_weights=False, binary_
     inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
     inputs = inputs.to('cuda')
     inputs_ = inputs.permute(0, 2, 1)
-    outputs = policy(inputs_)
+    
+    if text_embedding is not None:
+        outputs = policy(inputs_, text_embedding)
+    else:
+        outputs = policy(inputs_)
     if outputs.shape[-1] == 15:
         collision = outputs[:, :-4, -1] # B, N
         gripper_open = outputs[:, :-4, -2] # B, N
@@ -292,8 +300,8 @@ def run_high_level_policy_binary_inference(policy, batch, return_weights=False, 
     collision = outputs [:, :-4, 2] # B
     weights = torch.nn.functional.softmax(weights, dim=1)
 
-    gripper_open = outputs[:, 0]
-    collision = outputs[:, 1]
+    # gripper_open = outputs[:, 0]
+    # collision = outputs[:, 1]
 
     gripper_open = torch.sigmoid(gripper_open)
     collision = torch.sigmoid(collision)
