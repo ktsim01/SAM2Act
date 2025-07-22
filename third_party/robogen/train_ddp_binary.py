@@ -36,7 +36,7 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_superplus
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_Binary
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text
-        
+
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_large':
@@ -47,7 +47,7 @@ def train(args):
             else:
                 model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'pointnet2_binary':
-            model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
+            model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm, use_text_embedding=True).to(device)
         elif args.model_type == 'attn':
             model = AttnModel(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_superplus':
@@ -125,6 +125,9 @@ def train(args):
 
     if args.use_color:
         output_dir = output_dir + "_use_color"
+    
+    if args.use_text:
+        output_dir = output_dir + "_use_text"
         
     output_dir += args.exp_name
     
@@ -226,6 +229,7 @@ def train(args):
             
             if args.use_color:
                 gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+                # goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.zeros(goal_gripper_pcd.shape)], dim=2)
             else:
                 pointcloud = pointcloud[..., :3]
 
@@ -247,7 +251,7 @@ def train(args):
                     goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, goal_gripper_one_hot], dim=2)
                     inputs = torch.cat([pointcloud_, gripper_pcd_, goal_gripper_pcd_], dim=1) # B, N+8, 6
                 else:
-                    inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 3
+                    inputs = torch.cat([pointcloud, gripper_pcd, goal_gripper_pcd], dim=1) # B, N+4, 3
                     if args.n_obs_steps > 1:
                         B, H, _, _, = gripper_pcd_history.shape
                         gripper_pcd_history = gripper_pcd_history.reshape(B, -1, 3)
@@ -255,15 +259,20 @@ def train(args):
             else:
                 inputs = pointcloud
 
-            labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-            B, N, _, _ = labels.shape
-            labels = labels.view(B, N, -1) # B, N, 12
+            # labels = gripper_points.unsqueeze(1) - inputs[:, :6, :3].unsqueeze(2)
+            # B, N, _, _ = labels.shape
+            B, N, _ = inputs.shape
+            # labels = labels.view(B, N, -1) # B, N, 12
 
-            inputs, labels = inputs.to(device), labels.to(device)
+            # inputs, labels = inputs.to(device), labels.to(device)
             inputs = inputs.to(device)
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
-            outputs = model(inputs, lang_feats) # B, N, 2
+
+            if args.use_text:
+                outputs = model(inputs, lang_feats) # B, N, 2
+            else:
+                outputs = model(inputs)
 
             collision = outputs[:, :, -1] # B, N
             gripper_open = outputs[:, :, -2] # B, N
@@ -272,6 +281,15 @@ def train(args):
 
             # gripper_open = outputs[:, 0] # B, N
             # collision = outputs[:, 1] # B, N
+
+            # loss = 0.0
+            # loss_gripper = bce_loss(gripper_open, gripper_open_gt.to(device))
+            # loss = loss + loss_gripper * args.binary_loss_weight
+            # accumulated_gripper_loss += (loss_gripper * args.binary_loss_weight).item()
+
+            # loss_collision = bce_loss(collision, collision_gt.to(device))
+            # loss = loss + loss_collision * args.binary_loss_weight
+            # accumulated_collision_loss += (loss_collision * args.binary_loss_weight).item()
 
             loss = criterion(outputs, labels)
             accumulated_displacement_loss += loss.item()
@@ -363,7 +381,9 @@ def train(args):
 
                     # inputs = torch.cat([pointcloud_, gripper_pcd_, goal_gripper_pcd_], dim=1) # B, N+8, 6
 
+                    # RGB
                     gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+                    # goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.zeros(goal_gripper_pcd.shape)], dim=2)
                     inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 3
 
                     labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
@@ -461,7 +481,7 @@ def parse_args():
     parser.add_argument('--load_model_path', type=str, default=None)
     parser.add_argument('--output_obj_pcd_only', action='store_true')
     parser.add_argument('--weight_loss_weight', type=float, default=10)
-    parser.add_argument('--binary_loss_weight', type=float, default=5)
+    parser.add_argument('--binary_loss_weight', type=float, default=1)
     parser.add_argument('--use_all_data', action='store_true')
     parser.add_argument('--use_combined_action', action='store_true')
     parser.add_argument('--model_invariant', action='store_true')

@@ -479,8 +479,24 @@ class PointNet2_super(nn.Module):
     
 
 class PointNet2_Binary(nn.Module):
-    def __init__(self, num_classes, input_channel=3, keep_gripper_in_fps=False, use_in=False):
+    def __init__(self, num_classes, input_channel=3, keep_gripper_in_fps=False, use_in=False, use_text_embedding=False):
         super(PointNet2_Binary, self).__init__()
+        self.encoded_text_dim = 128  # Output dimension after encoding
+        if use_text_embedding:
+            self.text_encoder = nn.Linear(
+                1024, self.encoded_text_dim
+            )  # SIGLIP input dim
+            self.film_predictor = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),  # [B, 128] -> [B, 256]
+                nn.ReLU(),
+                nn.Linear(256, 1024 * 2),  # [B, 256] -> [B, 2048]
+            )
+            # Init as gamma=0 and beta=1
+            self.film_predictor[-1].weight.data.zero_()
+            self.film_predictor[-1].bias.data.copy_(
+                torch.cat([torch.ones(1024), torch.zeros(1024)])
+            )
+
         self.sa1 = PointNetSetAbstractionMsg(npoint=1024, radius_list=[0.025, 0.05], nsample_list=[16, 32], in_channel=input_channel - 3, mlp_list=[[16, 16, 32], [32, 32, 64]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
         self.sa2 = PointNetSetAbstractionMsg(npoint=512, radius_list=[0.05, 0.1], nsample_list=[16, 32], in_channel=96, mlp_list=[[64, 64, 128], [64, 96, 128]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
         self.sa3 = PointNetSetAbstractionMsg(256, [0.1, 0.2], [16, 32], 128+128, [[128, 196, 256], [128, 196, 256]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
@@ -508,7 +524,7 @@ class PointNet2_Binary(nn.Module):
         )
 
 
-    def forward(self, xyz):
+    def forward(self, xyz, text_embedding):
         l0_points = xyz
         l0_xyz = xyz[:, :3, :]
         
@@ -522,6 +538,14 @@ class PointNet2_Binary(nn.Module):
         l4_xyz, l4_points = self.sa4(l3_xyz, l3_points) # (B, 3, 128) (B, 1024, 128)
         l5_xyz, l5_points = self.sa5(l4_xyz, l4_points) # (B, 3, 64) (B , 1024, 64)
         l6_xyz, l6_points = self.sa6(l5_xyz, l5_points) # (B, 3, 16) (B, 1024, 16)
+
+        if text_embedding is not None:
+            encoded_text = self.text_encoder(text_embedding)  # [B, 128]
+            film_params = self.film_predictor(encoded_text)  # [B, 1024 * 2]
+            gamma, beta = film_params.chunk(2, dim=1)  # [B, 1024] each
+            gamma = gamma.unsqueeze(2)  # [B, 1024, 1] for broadcasting
+            beta = beta.unsqueeze(2)  # [B, 1024, 1] for broadcasting
+            l6_points = gamma * l6_points + beta  # FiLM modulation: [B, 1024, 16]
 
         # Pass it through an mlp here
         x = torch.max(l6_points, dim=2)[0]  # Global feature vector (B, 1024)

@@ -386,9 +386,65 @@ def _create_articubot_dataset(
     all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
     all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
 
-    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
-    np_points = all_pcd[rand_indx]
-    np_rgb = all_rgb[rand_indx]    
+    x_range = (-2.06492364, 2.26651619)
+    y_range = (-0.96348435, 1.00034714)
+    z_range = (0.3, 1.72072086)
+
+    mask = (
+    (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    # def create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=100):
+    #     # Create linspaces
+    #     x = np.linspace(*x_range, num_points_per_axis)
+    #     y = np.linspace(*y_range, num_points_per_axis)
+    #     z = np.linspace(*z_range, num_points_per_axis)
+
+    #     # Create meshgrids for each plane
+
+    #     # XY Plane (z = z_min)
+    #     xx_xy, yy_xy = np.meshgrid(x, y)
+    #     zz_xy = np.full_like(xx_xy, z_range[0])
+    #     xy_plane = np.stack([xx_xy, yy_xy, zz_xy], axis=-1).reshape(-1, 3)
+    #     xy_color = np.tile(np.array([[1.0, 0.0, 0.0]]), (xy_plane.shape[0], 1))  # Red
+
+    #     # YZ Plane (x = x_min)
+    #     yy_yz, zz_yz = np.meshgrid(y, z)
+    #     xx_yz = np.full_like(yy_yz, x_range[0])
+    #     yz_plane = np.stack([xx_yz, yy_yz, zz_yz], axis=-1).reshape(-1, 3)
+    #     yz_color = np.tile(np.array([[0.0, 1.0, 0.0]]), (yz_plane.shape[0], 1))  # Green
+
+    #     # ZX Plane (y = y_min)
+    #     zz_zx, xx_zx = np.meshgrid(z, x)
+    #     yy_zx = np.full_like(zz_zx, y_range[0])
+    #     zx_plane = np.stack([xx_zx, yy_zx, zz_zx], axis=-1).reshape(-1, 3)
+    #     zx_color = np.tile(np.array([[0.0, 0.0, 1.0]]), (zx_plane.shape[0], 1))  # Blue
+
+    #     # Concatenate all planes and their colors
+    #     all_planes = np.concatenate([xy_plane, yz_plane, zx_plane], axis=0)
+    #     all_colors = np.concatenate([xy_color, yz_color, zx_color], axis=0)
+
+    #     return all_planes, all_colors
+
+    # # Example usage:
+    # # Define bounding ranges based on your pointcloud limits
+    # x_range = ( -2.06492364, 2.26651619)
+    # y_range = (-0.96348435, 1.00034714)
+    # z_range = (0.3, 1.72072086)
+
+    # reference_planes, reference_colors = create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=50)
+
+    np_points= all_pcd[mask]
+    np_rgb = all_rgb[mask]
+
+    # np_points = np.concatenate([np_points, reference_planes], axis=0)
+    # np_rgb = np.concatenate([np_rgb, reference_colors], axis=0)
+
+    # rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    # np_points = all_pcd[rand_indx]
+    # np_rgb = all_rgb[rand_indx]    
 
     obj_pcd = o3d.geometry.PointCloud()
     obj_pcd.points = o3d.utility.Vector3dVector(np_points)
@@ -406,7 +462,7 @@ def _create_articubot_dataset(
             'state': obs.get_low_dim_data(),
             'lang_feats': lang_feats,}
     
-    directory = os.path.join('data', task + '_text_val', folder_name)
+    directory = os.path.join('data', task + '_keyframes_val', folder_name)
     if not os.path.exists(directory):
         os.makedirs(directory)
     
@@ -417,7 +473,7 @@ def _create_articubot_dataset(
 
 # Create articubot dataset for each frame
 def _create_featurized_dataset(
-    obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict
+    obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict, lang_feats
 ):
     # Construct point cloud
     folder_name = 'episode_' + str(episode_num)
@@ -470,22 +526,67 @@ def _create_featurized_dataset(
 
     out = upsample[0](out) # 3, 32, 128, 128
 
-    breakpoint()
-    # front_point_cloud, front_feature = reproject_features_to_3d(out[0], obs_dict['front_depth'].reshape(-1, *obs_dict['front_depth'].shape[4:]), obs_dict['front_camera_intrinsics'].reshape(-1, *obs_dict['front_camera_intrinsics'].shape[3:])) # N, 32
-    # left_point_cloud, left_feature = reproject_features_to_3d(out[1], obs_dict['left_shoulder_depth'].reshape(-1, *obs_dict['left_shoulder_depth'].shape[4:]), obs_dict['left_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_intrinsics'].shape[3:])) # N, 32
-    # right_point_cloud, right_feature = reproject_features_to_3d(out[2], obs_dict['right_shoulder_depth'].reshape(-1, *obs_dict['right_shoulder_depth'].shape[4:]), obs_dict['right_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_intrinsics'].shape[3:])) # N, 32
-    front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs_dict['front_depth'].detach().cpu().numpy(),
-                                                                             obs_dict['left_shoulder_camera_extrinsics'].detach().cpu().numpy(),
-                                                                             obs_dict['left_shoulder_camera_intrinsics'].detach().cpu().numpy())
-    
-    breakpoint()
+    front_point_cloud, front_feature = backproject_sam2_features_to_3d(out[0], obs_dict['front_depth'].reshape(-1, *obs_dict['front_depth'].shape[4:]), obs_dict['front_camera_intrinsics'].reshape(-1, *obs_dict['front_camera_intrinsics'].shape[3:]), obs_dict['front_camera_extrinsics'].reshape(-1, *obs_dict['front_camera_extrinsics'].shape[3:])) # N, 32
+    left_point_cloud, left_feature = backproject_sam2_features_to_3d(out[1], obs_dict['left_shoulder_depth'].reshape(-1, *obs_dict['left_shoulder_depth'].shape[4:]), obs_dict['left_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_intrinsics'].shape[3:]), obs_dict['left_shoulder_camera_extrinsics'].reshape(-1, *obs_dict['left_shoulder_camera_extrinsics'].shape[3:])) # N, 32
+    right_point_cloud, right_feature = backproject_sam2_features_to_3d(out[2], obs_dict['right_shoulder_depth'].reshape(-1, *obs_dict['right_shoulder_depth'].shape[4:]), obs_dict['right_shoulder_camera_intrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_intrinsics'].shape[3:]), obs_dict['right_shoulder_camera_extrinsics'].reshape(-1, *obs_dict['right_shoulder_camera_extrinsics'].shape[3:])) # N, 32
+    # front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs_dict['front_depth'].detach().cpu().numpy(),
+    #                                                                          obs_dict['left_shoulder_camera_extrinsics'].detach().cpu().numpy(),
+    #                                                                          obs_dict['left_shoulder_camera_intrinsics'].detach().cpu().numpy())
     all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0).detach().cpu().numpy()
     all_features = torch.concat([front_feature, left_feature, right_feature], axis=0).detach().cpu().numpy()
 
+    x_range = (-2.06492364, 2.26651619)
+    y_range = (-0.96348435, 1.00034714)
+    z_range = (0.3, 1.72072086)
+
+    mask = (
+    (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    np_points = all_pcd[mask]
+    np_rgb = all_features[mask]
+
+
+    def furthest_point_sampling(points, num_samples):
+        """
+        Args:
+            points (np.ndarray): Input point cloud, shape (N, 3)
+            num_samples (int): Number of points to sample
+
+        Returns:
+            sampled_indices (np.ndarray): Indices of the sampled points, shape (num_samples,)
+        """
+        N = points.shape[0]
+        sampled_indices = np.zeros(num_samples, dtype=np.int64)
+        distances = np.full(N, np.inf)
+
+        # Randomly select the first point
+        farthest_index = np.random.randint(0, N)
+        sampled_indices[0] = farthest_index
+
+        for i in range(1, num_samples):
+            # Compute distances from the current farthest point to all other points
+            current_point = points[farthest_index]
+            dist = np.linalg.norm(points - current_point, axis=1)
+
+            # Update the minimum distances to the sampled points
+            distances = np.minimum(distances, dist)
+
+            # Select the point with the maximum minimum distance
+            farthest_index = np.argmax(distances)
+            sampled_indices[i] = farthest_index
+
+        return sampled_indices
     # Randomly sample 30,000 points from the point cloud
-    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
-    np_points = all_pcd[rand_indx]
-    np_rgb = all_features[rand_indx]    
+    rand_idxes = np.random.choice(np_points.shape[0], 30000, replace=False)
+    np_points = np_points[rand_idxes]
+    np_rgb = np_rgb[rand_idxes]
+
+    # fps = furthest_point_sampling(np_points, 4500)
+    # np_points = np_points[fps]
+    # np_rgb = np_rgb[fps]
 
     # obj_pcd = o3d.geometry.PointCloud()
     # obj_pcd.points = o3d.utility.Vector3dVector(np_points)
@@ -500,7 +601,8 @@ def _create_featurized_dataset(
     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
             'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
-            'state': obs.get_low_dim_data()}
+            'state': obs.get_low_dim_data(),
+            'lang_feats': lang_feats,}
     
     if not os.path.exists('data/put_money_in_safe_featurized/' + folder_name):
         os.makedirs('data/put_money_in_safe_featurized/' + folder_name)
@@ -509,50 +611,108 @@ def _create_featurized_dataset(
         print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
         pickle.dump(data, f)
 
-def reproject_features_to_3d(features, depth, intrinsics):
-    """
-    Reprojects 2D features with a depth map into 3D space.
+# def reproject_features_to_3d(features, depth, intrinsics):
+#     """
+#     Reprojects 2D features with a depth map into 3D space.
 
+#     Args:
+#         features (torch.Tensor): shape (C, H, W)
+#         depth (torch.Tensor): shape (H, W)
+#         intrinsics (torch.Tensor): shape (3, 3)
+
+#     Returns:
+#         xyz_points (torch.Tensor): shape (H*W, 3)
+#         features_3d (torch.Tensor): shape (H*W, C)
+#     """
+#     assert features.shape[1:] == depth.shape, "Feature and depth resolution mismatch"
+    
+#     C, H, W = features.shape
+#     device = features.device
+
+#     # Mask out invalid depth (e.g., zeros)
+#     valid_mask = depth > 0
+#     num_valid = valid_mask.sum()
+
+#     # Create pixel grid
+#     y, x = torch.meshgrid(torch.arange(H, device=device), torch.arange(W, device=device), indexing='ij')
+#     x = x[valid_mask]
+#     y = y[valid_mask]
+#     z = depth[valid_mask]
+
+#     ones = torch.ones_like(x)
+#     pixel_coords = torch.stack([x, y, ones], dim=0).float()  # (3, N)
+
+#     # Inverse intrinsics
+#     K_inv = torch.inverse(intrinsics.to(device))
+
+#     # Unproject
+#     cam_coords = K_inv @ pixel_coords  # (3, N)
+#     cam_coords = cam_coords * z  # scale rays by depth
+#     xyz_points = cam_coords.T  # (N, 3)
+
+#     # Get features at valid pixels
+#     point_features = features.permute(1, 2, 0)[valid_mask]  # (N, C)
+
+#     return xyz_points, point_features
+
+
+def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
+    """
     Args:
-        features (torch.Tensor): shape (C, H, W)
-        depth (torch.Tensor): shape (H, W)
-        intrinsics (torch.Tensor): shape (3, 3)
+        features: [3, 32, H, W] tensor of SAM2 features (float32, GPU or CPU)
+        depths: [3, H, W] tensor of depth maps (float32, same device)
+        intrinsics: [3, 3, 3] tensor of camera intrinsics (float32)
+        extrinsics: [3, 4, 4] tensor of camera-to-world transforms (float32)
 
     Returns:
-        xyz_points (torch.Tensor): shape (H*W, 3)
-        features_3d (torch.Tensor): shape (H*W, C)
+        points_3d: [N, 3] tensor of 3D world coordinates
+        features_3d: [N, 32] tensor of feature vectors
     """
-    assert features.shape[1:] == depth.shape, "Feature and depth resolution mismatch"
-    
-    C, H, W = features.shape
     device = features.device
+    feat_dim, H, W = features.shape
 
-    # Mask out invalid depth (e.g., zeros)
+    all_points = []
+    all_feats = []
+
+    # Create meshgrid once
+    u = torch.arange(W, device=device)
+    v = torch.arange(H, device=device)
+    uu, vv = torch.meshgrid(u, v, indexing='xy')  # shape: [H, W]
+    ones = torch.ones_like(uu)
+
+    pixel_coords = torch.stack([uu, vv, ones], dim=0).reshape(3, -1).float()  # [3, H*W]
+
+    K = intrinsics # [3, 3]
+    K_inv = torch.inverse(K)
+    T = extrinsics # [4, 4]
+
+    depth = depths.reshape(-1)  # [H*W]
+
+    # 3D points in camera coordinates
+    cam_coords = K_inv @ pixel_coords * depth.unsqueeze(0)  # [3, H*W]
+
+    # Homogenize
+    cam_coords_h = torch.cat([cam_coords, torch.ones(1, cam_coords.shape[1], device=device)], dim=0)  # [4, H*W]
+
+    # Transform to world frame
+    world_coords = (T @ cam_coords_h)[:3]  # [3, H*W]
+
+    # Features
+    feat = features.reshape(feat_dim, -1)  # [32, H*W]
+
+    # Mask invalid depths
     valid_mask = depth > 0
-    num_valid = valid_mask.sum()
+    world_coords = world_coords[:, valid_mask].T  # [N, 3]
+    feat = feat[:, valid_mask].T  # [N, 32]
 
-    # Create pixel grid
-    y, x = torch.meshgrid(torch.arange(H, device=device), torch.arange(W, device=device), indexing='ij')
-    x = x[valid_mask]
-    y = y[valid_mask]
-    z = depth[valid_mask]
+    all_points.append(world_coords)
+    all_feats.append(feat)
 
-    ones = torch.ones_like(x)
-    pixel_coords = torch.stack([x, y, ones], dim=0).float()  # (3, N)
+    # Combine all views
+    points_3d = torch.cat(all_points, dim=0)  # [N_total, 3]
+    features_3d = torch.cat(all_feats, dim=0)  # [N_total, 32]
 
-    # Inverse intrinsics
-    K_inv = torch.inverse(intrinsics.to(device))
-
-    # Unproject
-    cam_coords = K_inv @ pixel_coords  # (3, N)
-    cam_coords = cam_coords * z  # scale rays by depth
-    xyz_points = cam_coords.T  # (N, 3)
-
-    # Get features at valid pixels
-    point_features = features.permute(1, 2, 0)[valid_mask]  # (N, C)
-
-    return xyz_points, point_features
-
+    return points_3d, features_3d
 
 # For rolling out
 def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
@@ -577,9 +737,22 @@ def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
     all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
     all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
 
-    rand_indx = np.random.choice(all_pcd.shape[0], 30000)
-    np_points = all_pcd[rand_indx]
-    np_rgb = all_rgb[rand_indx]    
+    x_range = (-2.06492364, 2.26651619)
+    y_range = (-0.96348435, 1.00034714)
+    z_range = (0.3, 1.72072086)
+
+    mask = (
+    (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    np_points= all_pcd[mask]
+    np_rgb = all_rgb[mask]
+
+    # rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    # np_points = all_pcd[rand_indx]
+    # np_rgb = all_rgb[rand_indx]    
 
     obj_pcd = o3d.geometry.PointCloud()
     obj_pcd.points = o3d.utility.Vector3dVector(np_points)
@@ -607,10 +780,10 @@ def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
     point_cloud = torch.from_numpy(np.expand_dims(point_cloud, axis=0))
 
     if add_one_hot:
-        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], 2)
+        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], 3)
         pointcloud_one_hot[:, :, 0] = 1
         point_cloud = torch.cat([point_cloud, pointcloud_one_hot], dim=2)
-        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 3)
         gripper_pcd_one_hot[:, :, 1] = 1
         gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
     
@@ -882,6 +1055,7 @@ def fill_articubot(
     episode_folder: str,
     variation_desriptions_pkl: str,
     clip_model=None,
+    sam2feats=False,
     device="cpu",
     args=None,
 ):
@@ -959,39 +1133,6 @@ def fill_articubot(
                     articubot_dataset=True,
                 )
 
-                # camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
-                # obs_config = peract_helper_utils.create_obs_config(CAMERAS, camera_resolution, method_name="", use_mask_from_replay=False)
-
-                # obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
-                #     obs,
-                #     CAMERAS,
-                #     t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
-                #     prev_action=None,
-                #     episode_length=25,
-                # )
-
-                # def reshape_dict_arrays_to_tensor(input_dict):
-                #     """
-                #     Converts every NumPy array in a dictionary to a PyTorch tensor
-                #     with shape (1, 1, n), where n is the flattened size of the array.
-
-                #     Args:
-                #         input_dict (dict): Dictionary with NumPy array values.
-
-                #     Returns:
-                #         dict: Dictionary with reshaped torch.Tensor values.
-                #     """
-                #     output_dict = {}
-                #     for key, value in input_dict.items():
-                #         if isinstance(value, np.ndarray):
-                #             tensor = torch.tensor(value, dtype=torch.float32, device='cuda:0').unsqueeze(0).unsqueeze(0)
-                #             output_dict[key] = tensor
-                #         else:
-                #             raise TypeError(f"Value for key '{key}' is not a NumPy array.")
-                #     return output_dict
-                
-                # obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
-
                 tokens = clip.tokenize([descs[0]]).numpy()
                 token_tensor = torch.from_numpy(tokens).to(device)
                 with torch.no_grad():
@@ -1001,8 +1142,42 @@ def fill_articubot(
 
                 lang_feats = lang_feats[0].float().detach().cpu().numpy()
 
-                _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats)
-                # _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict)
+                if sam2feats:
+                    camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
+                    obs_config = peract_helper_utils.create_obs_config(CAMERAS, camera_resolution, method_name="", use_mask_from_replay=False)
+
+                    obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
+                        obs,
+                        CAMERAS,
+                        t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
+                        prev_action=None,
+                        episode_length=25,
+                    )
+
+                    def reshape_dict_arrays_to_tensor(input_dict):
+                        """
+                        Converts every NumPy array in a dictionary to a PyTorch tensor
+                        with shape (1, 1, n), where n is the flattened size of the array.
+
+                        Args:
+                            input_dict (dict): Dictionary with NumPy array values.
+
+                        Returns:
+                            dict: Dictionary with reshaped torch.Tensor values.
+                        """
+                        output_dict = {}
+                        for key, value in input_dict.items():
+                            if isinstance(value, np.ndarray):
+                                tensor = torch.tensor(value, dtype=torch.float32, device='cuda:0').unsqueeze(0).unsqueeze(0)
+                                output_dict[key] = tensor
+                            else:
+                                raise TypeError(f"Value for key '{key}' is not a NumPy array.")
+                        return output_dict
+                    
+                    obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
+                    _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats)
+                else:
+                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats)
 
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it

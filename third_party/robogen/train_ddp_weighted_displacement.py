@@ -132,8 +132,11 @@ def train(args):
 
     if args.use_color:
         output_dir = output_dir + "_use_color"
+
+    if args.use_text:
+        output_dir = output_dir + "_use_text"
         
-    output_dir += args.exp_name
+    output_dir += "_" + args.exp_name
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
@@ -272,8 +275,11 @@ def train(args):
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
 
-            outputs = model(inputs, lang_feats) # B, N, 15
-            
+            if args.use_text:
+                outputs = model(inputs, lang_feats) # B, N, 15
+            else:
+                outputs = model(inputs)
+
             weights = outputs[:, :, -1] # B, N
             outputs = outputs[:, :, :-1] # B, N, 12
 

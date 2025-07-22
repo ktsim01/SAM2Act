@@ -207,9 +207,10 @@ def load_high_level_weighted_displacement_policy():
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
     # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
-    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-10_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth'
-    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-15_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # Text embedding
-    cprint(load_model_path, color='yellow')
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-10_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # No gripper nor collision
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-15_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # Text embedding
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-18_use_all_data_put_money_in_safe-obj_use_color_new_dataset/best_model.pth'
+    cprint(load_model_path, color='blue')
     # pointnet2_model = PointNet2_super(num_classes=13, input_channel=6, use_in=False).to('cuda')
     pointnet2_model = PointNet2_text(num_classes=13, input_channel=6, use_text_embedding=True).to('cuda')
 
@@ -218,12 +219,18 @@ def load_high_level_weighted_displacement_policy():
     return pointnet2_model
 
 def load_high_level_binary_prediction():
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth' # no weights
     # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-08_use_all_data_put_money_in_safe-obj_one_hot_use_gripper_open_use_collision_put_money_in_safe/model_100.pth' # weights
-    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-09_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth'
-    # load_model_path = '/home/ktsim/checkpoints/best_model.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-09_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # No text
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-16_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # text embedding
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-17_use_all_data_put_money_in_safe-obj_use_color_no_gripper_pcd/best_model.pth'
+    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-18_use_all_data_put_money_in_safe-obj_use_color_new_dataset/best_model.pth'
+
+    ### Binary Prediciton
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-21_use_all_data_put_money_in_safe-obj_no_weight_use_color_use_text_binary_prediction/best_model.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-21_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_text_binary_prediction/best_model.pth'
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_super(num_classes=15, input_channel=6, use_in=False).to('cuda')
+    pointnet2_model = PointNet2_text(num_classes=15, input_channel=6, use_text_embedding=True).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -284,7 +291,7 @@ def run_high_level_policy_inference(policy, batch, text_embedding=None, return_w
     else:
         return outputs
 
-def run_high_level_policy_binary_inference(policy, batch, return_weights=False, gripper_open=None, collision=None):
+def run_high_level_policy_binary_inference(policy, batch, return_weights=False, text_embedding=None, gripper_open=None, collision=None):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
@@ -293,7 +300,7 @@ def run_high_level_policy_binary_inference(policy, batch, return_weights=False, 
     inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
     inputs = inputs.to('cuda')
     inputs_ = inputs.permute(0, 2, 1)
-    outputs = policy(inputs_)
+    outputs = policy(inputs_, text_embedding)
     
     weights = outputs[:, :-4, 0]
     gripper_open = outputs [:, :-4, 1] # B

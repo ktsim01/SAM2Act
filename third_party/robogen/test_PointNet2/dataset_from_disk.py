@@ -407,19 +407,13 @@ def get_dataloader_from_pickle(all_obj_paths=None, batch_size=32, beg_ratio=0, e
 def get_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_ratio=0.9, eval_episode=None, only_first_stage=False, 
                             use_all_data=False, use_combined_action=False, dataset_prefix=None, num_train_objects=200, 
                             predict_two_goals=False, conditioning_on_demo=False, n_obs_steps=1, val=False):
-    
-    if dataset_prefix is None:
-        dataset_prefix='/scratch/chialiang/dp3_demo'
-        if use_combined_action:
-            dataset_prefix='/scratch/chialiang/dp3_demo_combine_2_new'
-    
     if all_obj_paths is None:
         print("num_train_objects: ", num_train_objects)
         if num_train_objects == 'put_money_in_safe':
             if val:
-                all_obj_paths = ['/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_text_val']
+                all_obj_paths = [dataset_prefix + '_val']
             else:
-                all_obj_paths = ['/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_text']
+                all_obj_paths = [dataset_prefix]
         else:
             raise ValueError('num_train_objects not supported')
         
