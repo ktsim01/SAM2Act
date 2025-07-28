@@ -520,7 +520,7 @@ class PointNet2_Binary(nn.Module):
         self.binary_head = nn.Sequential(
             nn.Linear(1024, 64),
             nn.ReLU(),
-            nn.Linear(64, 2),  # Output: [gripper_state, ignore_collision]
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
         )
 
 

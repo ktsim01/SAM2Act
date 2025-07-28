@@ -13,6 +13,7 @@ from rlbench.backend.const import *
 from rlbench.backend.utils import image_to_float_array, rgb_handles_to_mask
 from rlbench.demo import Demo
 from rlbench.observation_config import ObservationConfig
+from termcolor import cprint
 
 
 class InvalidTaskName(Exception):
@@ -58,9 +59,10 @@ def get_stored_demos(amount: int, image_paths: bool, dataset_root: str,
     else:
         # Sample an amount of examples for the variation of this task
         examples_path = join(
-            task_root, VARIATIONS_FOLDER % variation_number,
+            task_root, task_name + '_' + str(variation_number), VARIATIONS_FOLDER % 0,
             EPISODES_FOLDER)
         examples = listdir(examples_path)
+        cprint(examples_path, 'green')
 
     if amount == -1:
         amount = len(examples)

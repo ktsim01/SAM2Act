@@ -40,11 +40,11 @@ TASK="put_money_in_safe"
 #     exit 1
 # fi
 
-NP=1
+NP=2
 BS=50
 EPOCHS=100
 EXP_PATH=/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps
-DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/data/put_money_in_safe_articubot
+DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_text_filtered
 
 echo ${DATASET_PREFIX}/${TASK,,}/
 echo _${TASK}
@@ -56,6 +56,9 @@ torchrun --standalone --nproc_per_node=$NP train_ddp_weighted_displacement.py \
     --exp_path $EXP_PATH \
     --num_train_objects $TASK \
     --dataset_prefix ${DATASET_PREFIX} \
-    --exp_name _${TASK} \
     --use_all_data \
     --use_color \
+    --use_text \
+    --add_one_hot_encoding 1 \
+    --exp_name one_hot_and_reduction \
+    --wandb

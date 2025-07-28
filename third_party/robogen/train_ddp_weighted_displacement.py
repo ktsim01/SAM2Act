@@ -23,13 +23,11 @@ def ddp_setup():
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
-
+    input_channel = 3
     if args.use_color:
-        input_channel = 6
-    elif args.add_one_hot_encoding:
-        input_channel = 5
-    else:
-        input_channel = 3
+        input_channel += 3
+    if args.add_one_hot_encoding:
+        input_channel += 2
 
     if args.use_gripper_open and args.use_collision: 
         output_dim = 3 # weights, gripper, and collision
@@ -323,7 +321,7 @@ def train(args):
                     "epoch": epoch + 1,
                     "global_step": global_step,
                     "total_loss": running_loss / 1000,
-                    # "displacement_loss": accumulated_displacement_loss / 1000,
+                    "displacement_loss": accumulated_displacement_loss / 1000,
                     "weighting_loss": accumulated_weighting_loss / 1000,
 
                 }
@@ -332,7 +330,7 @@ def train(args):
                     wandb_run.log(log_info, step=global_step)
 
                 running_loss = 0.0
-                # accumulated_displacement_loss = 0.0
+                accumulated_displacement_loss = 0.0
                 accumulated_weighting_loss = 0.0
 
             global_step += 1
@@ -340,13 +338,16 @@ def train(args):
         
         if (epoch + 1) % 5 == 0:
             accumulated_val_loss = 0.0
-
+            model.eval()
             for i, data in enumerate(tqdm(val_dataloader)):
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
                 gripper_points = goal_gripper_pcd
 
                 if not args.use_color:
                     pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
+                
+                if args.use_color:
+                    gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
 
                 if args.add_one_hot_encoding:
                     pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
@@ -355,10 +356,9 @@ def train(args):
                     gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
                     gripper_pcd_one_hot[:, :, 1] = 1
                     gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
-                elif args.use_color:
-                    gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
 
-                inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
+
+                inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
 
                 labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
                 B, N, _, _ = labels.shape
@@ -386,17 +386,21 @@ def train(args):
                     # sum the displacement of the predicted gripper point cloud according to the weights
                     outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
                     outputs = outputs.sum(dim=1)
-                    accumulated_val_loss += criterion(outputs, gripper_points.to(device)).item()
-
+                    accumulated_val_loss += criterion(outputs, gripper_points.to(device))
+            
+            torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+                
             if os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / 1000}")
+                print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / 4400}")
 
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "accumulated_val_loss": accumulated_val_loss / 1000,
+                    "accumulated_val_loss": accumulated_val_loss / 4400,
                 }
-                wandb_run.log(log_info, step=global_step)
+                if args.wandb:
+                    wandb_run.log(log_info, step=global_step)
+
                 if accumulated_val_loss < min_val_loss:
                     min_val_loss = accumulated_val_loss
                     if os.environ['LOCAL_RANK'] == '0':
@@ -404,6 +408,8 @@ def train(args):
                         torch.save(model.module.state_dict(), save_path)
                         print(f"Saved best model to {save_path}")
                 accumulated_val_loss = 0.0
+            
+            model.train()
 
         if (epoch + 1) % args.save_freq == 0 and os.environ['LOCAL_RANK'] == '0':
             save_path = f"{args.exp_path}/model_{epoch + 1}.pth"
