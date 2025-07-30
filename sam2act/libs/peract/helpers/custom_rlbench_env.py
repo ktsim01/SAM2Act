@@ -280,7 +280,7 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         if self.eval:
             cam_placeholder = Dummy('cam_cinematic_placeholder')
             cam_base = Dummy('cam_cinematic_base')
-            cam_base.rotate([0, 0, np.pi * 0.5])
+            cam_base.rotate([0, 0, np.pi * 0.75])
             self._record_cam = VisionSensor.create([320, 180])
             self._record_cam.set_explicit_handling(True)
             self._record_cam.set_pose(cam_placeholder.get_pose())
@@ -298,17 +298,18 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
     def register_callback(self, func):
         self._task._scene.register_step_callback(func)
 
-    def _my_callback(self):
+    def _my_callback(self, rollout_articubot=True):
         if self._record_current_episode:
             self._record_cam.handle_explicitly()
             cap = (self._record_cam.capture_rgb() * 255).astype(np.uint8)
-            prediction_projected = self._record_cam.pixel_coords_from_pointcloud(self.high_level_prediction)
-            for x, y in prediction_projected:
-                for dx in [-1, 0, 1]:
-                    for dy in [-1, 0, 1]:
-                        xx, yy = x + dx, y + dy
-                        if 0 <= xx < cap.shape[1] and 0 <= yy < cap.shape[0]:
-                            cap[yy, xx] = [255, 0, 0]
+            if rollout_articubot:
+                prediction_projected = self._record_cam.pixel_coords_from_pointcloud(self.high_level_prediction)
+                for x, y in prediction_projected:
+                    for dx in [-1, 0, 1]:
+                        for dy in [-1, 0, 1]:
+                            xx, yy = x + dx, y + dy
+                            if 0 <= xx < cap.shape[1] and 0 <= yy < cap.shape[0]:
+                                cap[yy, xx] = [255, 0, 0]
                 # if x >= 0 and y >= 0 and x < cap.shape[1] and y < cap.shape[0]:
                 #     cap[y, x]= [255, 0, 0]  # Red dot for prediction
 

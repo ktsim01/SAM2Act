@@ -926,7 +926,6 @@ class SAM2Act_Agent:
             proprio=proprio,
             lang_emb=lang_goal_embs,
             img_aug=0,  # no img augmentation while acting
-            articubot=self.articubot,
         )
         _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
             out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
@@ -971,7 +970,7 @@ class SAM2Act_Agent:
         
     @torch.no_grad()
     def act_with_articubot(
-        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, binary_high_level=None, return_high_level_prediction=False
+        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, binary_high_level=None, gripper_high_level=None, collision_high_level=None, return_high_level_prediction=False
     ) -> ActResult:
         if self.add_lang:
             lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
@@ -990,17 +989,54 @@ class SAM2Act_Agent:
 
         obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
 
-        obs_dict = _get_articubot_dataset(observation, add_rgb=True)
-
-        gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, binary_prediction=True)
+        obs_dict = _get_articubot_dataset(observation, add_rgb=True, add_one_hot=True, one_hot_dim=2)
+        # obs_dict = _get_articubot_dataset(observation, add_rgb=True)
 
         subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
                                                                         return_weights=True, binary_prediction=False)
         
+        if True: # For binary predictions
+            goal_gripper_pcd = subgoal_pred[:12].reshape(4,3)
+
+            # RGB
+            goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.zeros(goal_gripper_pcd.shape).to(self._device)], dim=-1)  # add ones for homogeneous coordinates
+            # goal_gripper_pcd = goal_gripper_pcd.unsqueeze(0).unsqueeze(0)
+
+            # One hot
+            goal_gripper_one_hot = torch.zeros(goal_gripper_pcd.shape[0], 3).to(self._device)
+            goal_gripper_one_hot[:, 2] = 1
+            goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, goal_gripper_one_hot], dim=1)
+            goal_gripper_pcd_ = goal_gripper_pcd_.unsqueeze(0).unsqueeze(0)
+
+            obs_dict = _get_articubot_dataset(observation, add_rgb=True, add_one_hot=True, one_hot_dim=3)
+            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd_.to('cpu')
+
+            for key in obs_dict:
+                obs_dict[key] = obs_dict[key].to(self._device)
+
+            # gripper_open = ru.run_high_level_policy_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats, return_gripper=True)
+            collision = ru.run_high_level_policy_binary_inference(collision_high_level, obs_dict, text_embedding=lang_goal_feats, return_collision=True)
+
+        # gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, text_embedding=lang_goal_feats, return_weights=False, binary_prediction=True)
+
+
+        # pred_grip = gripper_open
+        pred_coll = collision
+        
         pred_wpt, pred_rot_quat = ru.get_gripper_pos_orient_from_4_points(subgoal_pred[:12].reshape(4,3).detach().cpu().numpy())
 
-        pred_grip = gripper_open
-        pred_coll = collision
+        temp_points = subgoal_pred[:12].reshape(4,3).detach().cpu().numpy()
+        dist = np.linalg.norm(temp_points[1] - temp_points[2])
+
+        # print(dist)
+        if dist < 0.08:
+            pred_grip = torch.tensor([0.0])
+            # pred_grip[0][0] = 0.0
+        else:
+            pred_grip = torch.tensor([1.0])
+            # pred_grip[0][0] = 1.0
+        # with open('output.txt', 'a') as f:
+        #     print(dist, file=f)
 
         # print('Subgoal Pred:', subgoal_pred)
         # print('pred_wpt and pred_rot_quat:', pred_wpt, pred_rot_quat)
@@ -1051,6 +1087,9 @@ class SAM2Act_Agent:
         #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         # )
 
+        print(pred_grip.item(), pred_coll.item())
+        # print(pred_grip, pred_coll)
+
         # import pickle
         # output = {'prediction': subgoal_pred, 'weights': weights, 'pointcloud': obs_dict['point_cloud']}
         # with open('debugging.pkl', 'wb') as f:
@@ -1059,10 +1098,10 @@ class SAM2Act_Agent:
 
         continuous_action = np.concatenate(
             (
-                pred_wpt,
+                pred_wpt, #[0].cpu().numpy(),
                 pred_rot_quat,
-                pred_grip[0][0].detach().cpu().numpy(),
-                pred_coll[0][0].detach().cpu().numpy(),
+                pred_grip.detach().cpu().numpy(),
+                pred_coll.detach().cpu().numpy(),
             )
         )
         if pred_distri:

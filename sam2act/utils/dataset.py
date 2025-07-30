@@ -608,7 +608,7 @@ def _create_featurized_dataset(
         os.makedirs('data/put_money_in_safe_featurized/' + folder_name)
     
     with open('data/put_money_in_safe_featurized/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
-        print('Saving data to: ', folder_name + '/' + str(sample_frame) + '.pkl')
+        print('Saving data to: ', 'data/put_money_in_safe_featurized/' + folder_name + '/' + str(sample_frame) + '.pkl')
         pickle.dump(data, f)
 
 # def reproject_features_to_3d(features, depth, intrinsics):
@@ -715,7 +715,7 @@ def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
     return points_3d, features_3d
 
 # For rolling out
-def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
+def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False, one_hot_dim=3):
     front_pcd = obs['front_point_cloud'].detach().cpu().numpy()
     front_pcd = front_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
     wrist_pcd = obs['wrist_point_cloud'].detach().cpu().numpy()
@@ -780,10 +780,10 @@ def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False):
     point_cloud = torch.from_numpy(np.expand_dims(point_cloud, axis=0))
 
     if add_one_hot:
-        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], 3)
+        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], one_hot_dim)
         pointcloud_one_hot[:, :, 0] = 1
         point_cloud = torch.cat([point_cloud, pointcloud_one_hot], dim=2)
-        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 3)
+        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], one_hot_dim)
         gripper_pcd_one_hot[:, :, 1] = 1
         gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
     
@@ -1104,7 +1104,7 @@ def fill_articubot(
             # extract keypoints
             episode_keypoints = keypoint_discovery(demo)  # list of keypoint   [id0, id1, id2]
             next_keypoint_idx = 0
-            for i in range(len(demo) - 1):
+            for i in range(len(demo)):
                 # if not demo_augmentation and i > 0:
                 #     break
                 # if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
