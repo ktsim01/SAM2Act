@@ -367,7 +367,7 @@ def _clip_encode_text(clip_model, text):
     return x, emb
 # add individual data points to a replay
 def _create_articubot_dataset(
-    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
 ):
     folder_name = 'episode_' + str(episode_num)
     print(episode_num, sample_frame)
@@ -462,7 +462,10 @@ def _create_articubot_dataset(
             'state': obs.get_low_dim_data(),
             'lang_feats': lang_feats,}
     
-    directory = os.path.join('data', task + '_keyframes_val', folder_name)
+    if val:
+        directory = os.path.join('data_articubot', task + '_val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task, folder_name)
     if not os.path.exists(directory):
         os.makedirs(directory)
     
@@ -1057,6 +1060,7 @@ def fill_articubot(
     clip_model=None,
     sam2feats=False,
     device="cpu",
+    val=False,
     args=None,
 ):
 
@@ -1177,7 +1181,7 @@ def fill_articubot(
                     obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
                     _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats)
                 else:
-                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats)
+                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
 
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it

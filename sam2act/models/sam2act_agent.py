@@ -994,7 +994,6 @@ class SAM2Act_Agent:
 
         subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
                                                                         return_weights=True, binary_prediction=False)
-        
         if True: # For binary predictions
             goal_gripper_pcd = subgoal_pred[:12].reshape(4,3)
 
@@ -1028,7 +1027,6 @@ class SAM2Act_Agent:
         temp_points = subgoal_pred[:12].reshape(4,3).detach().cpu().numpy()
         dist = np.linalg.norm(temp_points[1] - temp_points[2])
 
-        # print(dist)
         if dist < 0.08:
             pred_grip = torch.tensor([0.0])
             # pred_grip[0][0] = 0.0

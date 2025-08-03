@@ -35,6 +35,7 @@ def get_dataset(
     only_train,
     sample_distribution_mode="transition_uniform",
     create_articubot_dataset=False,
+    val_dataset=False,
     args=None,
 ):
 
@@ -88,7 +89,32 @@ def get_dataset(
 
         # print("----- Train Buffer -----")
         if create_articubot_dataset:
-            fill_articubot(
+            if not val_dataset:
+                fill_articubot(
+                    replay=train_replay_buffer,
+                    task=task,
+                    task_replay_storage_folder=train_replay_storage_folder,
+                    start_idx=0,
+                    num_demos=NUM_TRAIN,
+                    demo_augmentation=True,
+                    demo_augmentation_every_n=DEMO_AUGMENTATION_EVERY_N,
+                    cameras=CAMERAS,
+                    rlbench_scene_bounds=SCENE_BOUNDS,
+                    voxel_sizes=VOXEL_SIZES,
+                    rotation_resolution=ROTATION_RESOLUTION,
+                    crop_augmentation=False,
+                    data_path=data_path_train,
+                    # data_path=data_path_val,
+                    episode_folder=EPISODE_FOLDER,
+                    variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
+                    clip_model=clip_model,
+                    sam2feats=False,
+                    device=device,
+                    val=False,
+                    args=args,
+                )
+            else:
+                fill_articubot(
                 replay=train_replay_buffer,
                 task=task,
                 task_replay_storage_folder=train_replay_storage_folder,
@@ -108,8 +134,9 @@ def get_dataset(
                 clip_model=clip_model,
                 sam2feats=False,
                 device=device,
+                val=True,
                 args=args,
-            )
+                )
         else:
             # Adds sam2 encoded features
             fill_articubot(
@@ -131,29 +158,6 @@ def get_dataset(
                 variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
                 clip_model=clip_model,
                 sam2feats=True,
-                device=device,
-                args=args,
-            )
-        if False:
-            fill_articubot(
-                replay=train_replay_buffer,
-                task=task,
-                task_replay_storage_folder=train_replay_storage_folder,
-                start_idx=0,
-                num_demos=NUM_TRAIN,
-                demo_augmentation=True,
-                demo_augmentation_every_n=DEMO_AUGMENTATION_EVERY_N,
-                cameras=CAMERAS,
-                rlbench_scene_bounds=SCENE_BOUNDS,
-                voxel_sizes=VOXEL_SIZES,
-                rotation_resolution=ROTATION_RESOLUTION,
-                crop_augmentation=False,
-                # data_path=data_path_train,
-                data_path=data_path_val,
-                episode_folder=EPISODE_FOLDER,
-                variation_desriptions_pkl=VARIATION_DESCRIPTIONS_PKL,
-                clip_model=clip_model,
-                sam2feats=False,
                 device=device,
                 args=args,
             )

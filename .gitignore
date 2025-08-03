@@ -35,6 +35,7 @@ MANIFEST
 
 sam2act/data
 sam2act/data_colosseum
+sam2act/data_articubot
 sam2act/data_memory
 sam2act/replay
 sam2act/replay_temporal

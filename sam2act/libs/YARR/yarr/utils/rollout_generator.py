@@ -25,7 +25,9 @@ class RolloutGenerator(object):
                   record_enabled: bool = False,
                   replay_ground_truth: bool = False,
                   high_level_policy=None,
-                    binary_high_level=None,
+                  binary_high_level=None,
+                  gripper_high_level=None,
+                  collision_high_level=None,
                   rollout_articubot=False):            
         
         if eval:
@@ -53,7 +55,7 @@ class RolloutGenerator(object):
                 #                     deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level)
                 
                 act_result, predictions = agent.act_with_articubot(step_signal.value, prepped_data,
-                    deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level, return_high_level_prediction=True)
+                    deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level, gripper_high_level=gripper_high_level, collision_high_level=collision_high_level, return_high_level_prediction=True)
             else:
                 if step >= len(actions):
                     return

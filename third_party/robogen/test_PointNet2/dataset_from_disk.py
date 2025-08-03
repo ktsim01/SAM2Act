@@ -409,14 +409,11 @@ def get_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_ratio=0.9, eval
                             predict_two_goals=False, conditioning_on_demo=False, n_obs_steps=1, val=False):
     if all_obj_paths is None:
         print("num_train_objects: ", num_train_objects)
-        if num_train_objects == 'put_money_in_safe':
-            if val:
-                all_obj_paths = [dataset_prefix + '_val']
-            else:
-                all_obj_paths = [dataset_prefix]
+        if val:
+            all_obj_paths = [dataset_prefix + '_val']
         else:
-            raise ValueError('num_train_objects not supported')
-        
+            all_obj_paths = [dataset_prefix]
+
     if not predict_two_goals:
         dataset = PointNetDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, 
                                           is_pickle=True, use_all_data=use_all_data, conditioning_on_demo=conditioning_on_demo,
@@ -431,50 +428,12 @@ def get_train_and_val_dataset_from_pickle(all_obj_paths=None, beg_ratio=0, end_r
                                             use_all_data=False, use_combined_action=False, dataset_prefix=None, num_train_objects=200, 
                                             predict_two_goals=False, conditioning_on_demo=False, n_obs_steps=1, use_color=False,
                                             num_demos_in_val=10):
-                    
-    if dataset_prefix is None:
-        dataset_prefix='/scratch/chialiang/dp3_demo'
-        if use_combined_action:
-            dataset_prefix='/scratch/chialiang/dp3_demo_combine_2_new'
-    
-    if all_obj_paths is None:
-        print("num_train_objects: ", num_train_objects)
-        if num_train_objects == 'square_D0':
-            all_obj_paths = ['/scratch/minon/articubot_abs']
-        elif num_train_objects == 'square_D0_new':
-            all_obj_paths = ['/scratch/minon/articubot_abs_cleaned_4000']
-        elif num_train_objects == 'square_d2_abs':
-            all_obj_paths = ['/scratch/minon/square_d2_abs']
-        elif num_train_objects == 'three_piece_assembly_d2_abs':
-            all_obj_paths = ['/scratch/minon/three_piece_assembly_d2_abs']
-        elif num_train_objects == 'threading_d2_abs':
-            all_obj_paths = ['/scratch/minon/threading_d2_abs']
-        elif num_train_objects == 'coffee_d2_abs':
-            all_obj_paths = ['/scratch/minon/coffee_d2_abs']
-        elif num_train_objects == 'hammer_cleanup_d1_abs':
-            all_obj_paths = ['/scratch/minon/hammer_cleanup_d1_abs']
-        elif num_train_objects == 'stack_d1_abs':
-            all_obj_paths = ['/scratch/minon/stack_d1_abs']
-        elif num_train_objects == 'stack_three_d1_abs':
-            all_obj_paths = ['/scratch/minon/stack_three_d1_abs']
-        elif num_train_objects == 'mug_cleanup_d1_abs':
-            all_obj_paths = ['/scratch/minon/mug_cleanup_d1_abs']
-        elif num_train_objects == 'kitchen_d1_abs':
-            all_obj_paths = ['/scratch/minon/kitchen_d1_abs']
-        elif num_train_objects == 'nut_assembly_d0_abs':
-            all_obj_paths = ['/scratch/minon/nut_assembly_d0_abs']
-        elif num_train_objects == 'pick_place_d0_abs':
-            all_obj_paths = ['/scratch/minon/pick_place_d0_abs']
-        elif num_train_objects == 'coffee_preparation_d1_abs':
-            all_obj_paths = ['/scratch/minon/coffee_preparation_d1_abs']
-        elif num_train_objects == 'put_money_in_safe':
-            all_obj_paths = ['/home/ktsim/Projects/SAM2Act/sam2act/data/put_money_in_safe_articubot']
-        else:
-            raise ValueError(f'num_train_objects {num_train_objects} not supported')
         
-        # episodes_for_val = [f'episode_{i}' for i in np.random.randint(low=0, high=1000, size=num_demos_in_val)]
-        episodes_for_val = ['episode_0', 'episode_1', 'episode_2', 'episode_3', 'episode_4', 'episode_5', 'episode_6', 'episode_7', 'episode_8', 'episode_9']  
-        cprint(f'initial validation episodes {episodes_for_val}')
+    all_obj_paths = [dataset_prefix]
+    
+    # episodes_for_val = [f'episode_{i}' for i in np.random.randint(low=0, high=1000, size=num_demos_in_val)]
+    episodes_for_val = ['episode_0', 'episode_1', 'episode_2', 'episode_3', 'episode_4', 'episode_5', 'episode_6', 'episode_7', 'episode_8', 'episode_9']  
+    cprint(f'initial validation episodes {episodes_for_val}')
     if not predict_two_goals:
             train_dataset = PointNetDatasetFromDisk(all_obj_paths, beg_ratio, end_ratio, eval_episode, only_first_stage, 
                                             is_pickle=True, use_all_data=use_all_data, conditioning_on_demo=conditioning_on_demo,

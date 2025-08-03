@@ -242,6 +242,8 @@ def eval(
     rollout_articubot=False,
     high_level_policy=None,
     binary_high_level=None,
+    gripper_high_level=None,
+    collision_high_level=None,
 ):
     
     agent.eval()
@@ -271,7 +273,6 @@ def eval(
         if task not in task_files:
             raise ValueError("Task %s not recognised!." % task)
         task_classes.append(task_file_to_task_class(task))
-
     eval_env = CustomMultiTaskRLBenchEnv(
         task_classes=task_classes,
         observation_config=obs_config,
@@ -332,6 +333,8 @@ def eval(
                 replay_ground_truth=replay_ground_truth,
                 high_level_policy=high_level_policy,
                 binary_high_level=binary_high_level,
+                gripper_high_level=gripper_high_level,
+                collision_high_level=collision_high_level,
                 rollout_articubot=rollout_articubot,
             )
             try:
@@ -564,7 +567,8 @@ def _eval(args):
 
         if args.rollout_articubot:
             high_level_policy = ru.load_high_level_weighted_displacement_policy()
-            binary_high_level = ru.load_high_level_binary_prediction()      
+            gripper_high_level = ru.load_high_level_binary_prediction(gripper=True)
+            collision_high_level = ru.load_high_level_binary_prediction(collision=True)      
         
         os.makedirs(agent_eval_log_dir, exist_ok=True)
         scores = eval(
@@ -583,7 +587,8 @@ def _eval(args):
             save_video=args.save_video,
             rollout_articubot=args.rollout_articubot,
             high_level_policy=high_level_policy,
-            binary_high_level=binary_high_level,
+            gripper_high_level=gripper_high_level,
+            collision_high_level=collision_high_level,
         )
         print(f"model {model_path}, scores {scores}")
         task_scores = {}

@@ -389,14 +389,15 @@ def train(args):
                     accumulated_val_loss += criterion(outputs, gripper_points.to(device))
             
             torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
-                
+            accumulated_val_loss = accumulated_val_loss.item()
+
             if os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / 4400}")
+                print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / len(val_dataloader.dataset)}")
 
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "accumulated_val_loss": accumulated_val_loss / 4400,
+                    "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)
