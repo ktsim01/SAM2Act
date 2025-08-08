@@ -566,7 +566,76 @@ class PointNet2_Binary(nn.Module):
         # x = F.log_softmax(x, dim=1)
         x = x.permute(0, 2, 1)
         return x # x shape: B, N, num_classes
-        
+
+class PointNet2GripperBinary(nn.Module):
+    def __init__(self, num_classes=2, input_channel=3, use_text_embedding=False):
+        super().__init__()
+        self.use_text_embedding = use_text_embedding
+        self.encoded_text_dim = 128
+
+        # Minimal PointNet++ setup
+        self.sa1 = PointNetSetAbstractionMsg(
+            npoint=4,  # Same as total number of input points
+            radius_list=[0.05],
+            nsample_list=[4],
+            in_channel=input_channel - 3,
+            mlp_list=[[32, 64]],
+            use_in=False
+        )
+
+        # if use_text_embedding:
+        #     self.text_encoder = nn.Linear(1024, self.encoded_text_dim)
+        #     self.film_predictor = nn.Sequential(
+        #         nn.Linear(self.encoded_text_dim, 128),
+        #         nn.ReLU(),
+        #         nn.Linear(128, 64 * 2)
+        #     )
+        #     self.film_predictor[-1].weight.data.zero_()
+        #     self.film_predictor[-1].bias.data.copy_(
+        #         torch.cat([torch.ones(64), torch.zeros(64)])
+        #     )
+
+        self.mlp = nn.Sequential(
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, num_classes)
+        )
+
+    def forward(self, xyz, text_embedding=None):
+        # xyz: (B, C, N) where N = 4
+        l0_xyz = xyz[:, :3, :]
+        l0_points = xyz[:, 3:, :] if xyz.shape[1] > 3 else None
+
+        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)  # Output: (B, 3, 4), (B, 64, 4)
+
+        # if self.use_text_embedding and text_embedding is not None:
+        #     encoded_text = self.text_encoder(text_embedding)  # (B, 128)
+        #     film_params = self.film_predictor(encoded_text)   # (B, 128)
+        #     gamma, beta = film_params.chunk(2, dim=1)
+        #     gamma = gamma.unsqueeze(2)
+        #     beta = beta.unsqueeze(2)
+        #     l1_points = gamma * l1_points + beta
+
+        x = torch.max(l1_points, dim=2)[0]  # Global max pooling: (B, 64)
+        x = self.mlp(x)  # (B, num_classes)
+        return x
+
+class GripperDistanceClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(1, 16),
+            nn.ReLU(),
+            nn.Linear(16, 8),
+            nn.ReLU(),
+            nn.Linear(8, 1)  # Output logits for BCEWithLogitsLoss
+        )
+
+    def forward(self, distance):
+        # distance: shape (B, 1)
+        return self.mlp(distance)
+
+
 class PointNet2_superplus(nn.Module):
     def __init__(self, num_classes):
         super(PointNet2_superplus, self).__init__()

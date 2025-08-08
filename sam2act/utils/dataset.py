@@ -367,7 +367,7 @@ def _clip_encode_text(clip_model, text):
     return x, emb
 # add individual data points to a replay
 def _create_articubot_dataset(
-    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
+    task, obs, episode_num, sample_frame, key_frame_obs, frame_before_keyframe, action, lang_feats, val
 ):
     folder_name = 'episode_' + str(episode_num)
     print(episode_num, sample_frame)
@@ -458,14 +458,14 @@ def _create_articubot_dataset(
 
     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
-            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], frame_before_keyframe.gripper_joint_positions[1]), axis=0),
             'state': obs.get_low_dim_data(),
             'lang_feats': lang_feats,}
     
     if val:
         directory = os.path.join('data_articubot', task + '_val', folder_name)
     else:
-        directory = os.path.join('data_articubot', task, folder_name)
+        directory = os.path.join('data_articubot', task + '_temp', folder_name)
     if not os.path.exists(directory):
         os.makedirs(directory)
     
@@ -476,7 +476,7 @@ def _create_articubot_dataset(
 
 # Create articubot dataset for each frame
 def _create_featurized_dataset(
-    obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict, lang_feats
+    task, obs, episode_num, sample_frame, key_frame_obs, action, agent, obs_dict, lang_feats, val
 ):
     # Construct point cloud
     folder_name = 'episode_' + str(episode_num)
@@ -535,8 +535,8 @@ def _create_featurized_dataset(
     # front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs_dict['front_depth'].detach().cpu().numpy(),
     #                                                                          obs_dict['left_shoulder_camera_extrinsics'].detach().cpu().numpy(),
     #                                                                          obs_dict['left_shoulder_camera_intrinsics'].detach().cpu().numpy())
-    all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0).detach().cpu().numpy()
-    all_features = torch.concat([front_feature, left_feature, right_feature], axis=0).detach().cpu().numpy()
+    all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0) #.detach().cpu().numpy()
+    all_features = torch.concat([front_feature, left_feature, right_feature], axis=0) #.detach().cpu().numpy()
 
     x_range = (-2.06492364, 2.26651619)
     y_range = (-0.96348435, 1.00034714)
@@ -552,44 +552,76 @@ def _create_featurized_dataset(
     np_rgb = all_features[mask]
 
 
-    def furthest_point_sampling(points, num_samples):
+    # def furthest_point_sampling(points, num_samples):
+    #     """
+    #     Args:
+    #         points (np.ndarray): Input point cloud, shape (N, 3)
+    #         num_samples (int): Number of points to sample
+
+    #     Returns:
+    #         sampled_indices (np.ndarray): Indices of the sampled points, shape (num_samples,)
+    #     """
+    #     N = points.shape[0]
+    #     sampled_indices = np.zeros(num_samples, dtype=np.int64)
+    #     distances = np.full(N, np.inf)
+
+    #     # Randomly select the first point
+    #     farthest_index = np.random.randint(0, N)
+    #     sampled_indices[0] = farthest_index
+
+    #     for i in range(1, num_samples):
+    #         # Compute distances from the current farthest point to all other points
+    #         current_point = points[farthest_index]
+    #         dist = np.linalg.norm(points - current_point, axis=1)
+
+    #         # Update the minimum distances to the sampled points
+    #         distances = np.minimum(distances, dist)
+
+    #         # Select the point with the maximum minimum distance
+    #         farthest_index = np.argmax(distances)
+    #         sampled_indices[i] = farthest_index
+
+    #     return sampled_indices
+    
+    def furthest_point_sampling(points: torch.Tensor, num_samples: int) -> torch.Tensor:
         """
         Args:
-            points (np.ndarray): Input point cloud, shape (N, 3)
+            points (torch.Tensor): Input point cloud, shape (N, 3)
             num_samples (int): Number of points to sample
 
         Returns:
-            sampled_indices (np.ndarray): Indices of the sampled points, shape (num_samples,)
+            sampled_indices (torch.Tensor): Indices of the sampled points, shape (num_samples,)
         """
+        device = points.device
         N = points.shape[0]
-        sampled_indices = np.zeros(num_samples, dtype=np.int64)
-        distances = np.full(N, np.inf)
+        sampled_indices = torch.zeros(num_samples, dtype=torch.long, device=device)
+        distances = torch.full((N,), float('inf'), device=device)
 
         # Randomly select the first point
-        farthest_index = np.random.randint(0, N)
+        farthest_index = torch.randint(0, N, (1,), device=device).item()
         sampled_indices[0] = farthest_index
 
         for i in range(1, num_samples):
-            # Compute distances from the current farthest point to all other points
-            current_point = points[farthest_index]
-            dist = np.linalg.norm(points - current_point, axis=1)
+            current_point = points[farthest_index].unsqueeze(0)  # Shape (1, 3)
+            dist = torch.norm(points - current_point, dim=1)     # Shape (N,)
 
-            # Update the minimum distances to the sampled points
-            distances = np.minimum(distances, dist)
+            # Update the minimum distances
+            distances = torch.minimum(distances, dist)
 
-            # Select the point with the maximum minimum distance
-            farthest_index = np.argmax(distances)
+            # Select the next farthest point
+            farthest_index = torch.argmax(distances).item()
             sampled_indices[i] = farthest_index
 
         return sampled_indices
+    
     # Randomly sample 30,000 points from the point cloud
-    rand_idxes = np.random.choice(np_points.shape[0], 30000, replace=False)
-    np_points = np_points[rand_idxes]
-    np_rgb = np_rgb[rand_idxes]
+    # rand_idxes = np.random.choice(np_points.shape[0], 30000, replace=False)
+    # np_points = np_points[rand_idxes]
+    # np_rgb = np_rgb[rand_idxes]
 
-    # fps = furthest_point_sampling(np_points, 4500)
-    # np_points = np_points[fps]
-    # np_rgb = np_rgb[fps]
+    fps = furthest_point_sampling(np_points, 4500)
+    np_points = np_points[fps]
+    np_rgb = np_rgb[fps]
 
     # obj_pcd = o3d.geometry.PointCloud()
     # obj_pcd.points = o3d.utility.Vector3dVector(np_points)
@@ -599,7 +631,7 @@ def _create_featurized_dataset(
 
     # sampled_points = np.asarray(sampled_pcd.points)
     # sampled_rgb = np.asarray(sampled_pcd.colors)
-    point_cloud = np.concatenate([np_points, np_rgb], axis=1)
+    point_cloud = np.concatenate([np_points.detach().cpu().numpy(), np_rgb.detach().cpu().numpy()], axis=1)
 
     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
@@ -607,11 +639,16 @@ def _create_featurized_dataset(
             'state': obs.get_low_dim_data(),
             'lang_feats': lang_feats,}
     
-    if not os.path.exists('data/put_money_in_safe_featurized/' + folder_name):
-        os.makedirs('data/put_money_in_safe_featurized/' + folder_name)
+    if val:
+        directory = os.path.join('data_articubot', task + '_featurized_val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task + '_featurized', folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     
-    with open('data/put_money_in_safe_featurized/' + folder_name + '/' + str(sample_frame) + '.pkl', 'wb') as f:
-        print('Saving data to: ', 'data/put_money_in_safe_featurized/' + folder_name + '/' + str(sample_frame) + '.pkl')
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving data to: ', final_path)
         pickle.dump(data, f)
 
 # def reproject_features_to_3d(features, depth, intrinsics):
@@ -718,7 +755,7 @@ def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
     return points_3d, features_3d
 
 # For rolling out
-def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False, one_hot_dim=3):
+def _get_articubot_dataset(obs, add_rgb_zeros=False, add_rgb_ones=False, add_one_hot=False, one_hot_dim=3):
     front_pcd = obs['front_point_cloud'].detach().cpu().numpy()
     front_pcd = front_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
     wrist_pcd = obs['wrist_point_cloud'].detach().cpu().numpy()
@@ -766,7 +803,7 @@ def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False, one_hot_dim=3)
     sampled_points = np.asarray(sampled_pcd.points)
     sampled_rgb = np.asarray(sampled_pcd.colors)
 
-    if add_rgb:
+    if add_rgb_zeros or add_rgb_ones:
         point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
     else: 
         point_cloud = sampled_points
@@ -777,7 +814,10 @@ def _get_articubot_dataset(obs, add_rgb=False, add_one_hot=False, one_hot_dim=3)
     gripper_pcd = np.expand_dims(get_4_points_from_gripper_pos_orient(gripper_pose[:3], gripper_pose[3:7], joint_pos[1]), axis=0)
     gripper_pcd = torch.from_numpy(gripper_pcd)
 
-    if add_rgb:
+    if add_rgb_zeros:
+        gripper_pcd = torch.cat([gripper_pcd, torch.zeros(gripper_pcd.shape)], dim=2)
+
+    elif add_rgb_ones:
         gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
 
     point_cloud = torch.from_numpy(np.expand_dims(point_cloud, axis=0))
@@ -1108,6 +1148,7 @@ def fill_articubot(
             # extract keypoints
             episode_keypoints = keypoint_discovery(demo)  # list of keypoint   [id0, id1, id2]
             next_keypoint_idx = 0
+            frame_before_keypoint = demo[0]
             for i in range(len(demo)):
                 # if not demo_augmentation and i > 0:
                 #     break
@@ -1116,8 +1157,18 @@ def fill_articubot(
                 print(episode_keypoints[next_keypoint_idx])
                 obs = demo[i]
                 key_frame_obs = demo[episode_keypoints[next_keypoint_idx]]
+
                 if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints):
                     next_keypoint_idx = next_keypoint_idx + 1
+                    frame_before_keypoint = demo[episode_keypoints[next_keypoint_idx-1]]
+
+                if i >= episode_keypoints[next_keypoint_idx-1]:
+                    frame_before_keypoint = demo[i]
+                    
+
+                
+
+                
 
                 obs_tp1 = demo[i]    # keypoint frame
                 obs_tm1 = demo[max(0, i - 1)]   # frame before keypoint
@@ -1150,7 +1201,7 @@ def fill_articubot(
                     camera_resolution = [IMAGE_SIZE, IMAGE_SIZE]
                     obs_config = peract_helper_utils.create_obs_config(CAMERAS, camera_resolution, method_name="", use_mask_from_replay=False)
 
-                    obs_dict = obs_dict = extract_obs(      #  obs is the i_th frame
+                    obs_dict = extract_obs(      #  obs is the i_th frame
                         obs,
                         CAMERAS,
                         t= next_keypoint_idx,     # t for calculate time, represent t_th keypoint
@@ -1179,9 +1230,9 @@ def fill_articubot(
                         return output_dict
                     
                     obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
-                    _create_featurized_dataset(obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats)
+                    _create_featurized_dataset(task, obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats, val=val)
                 else:
-                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
+                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, frame_before_keypoint, action, lang_feats, val=val)
 
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it

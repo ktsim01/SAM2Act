@@ -82,7 +82,7 @@ def train(args):
     # dataloader = get_dataloader(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
     # dataloader = get_dataloader_from_pickle(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
     
-    output_dir = args.model_type 
+    output_dir = 'collision_' + args.model_type 
 
     if args.model_invariant:
         output_dir = output_dir + "_model_invariant"
