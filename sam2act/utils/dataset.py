@@ -458,14 +458,14 @@ def _create_articubot_dataset(
 
     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
-            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], frame_before_keyframe.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
             'state': obs.get_low_dim_data(),
             'lang_feats': lang_feats,}
     
     if val:
         directory = os.path.join('data_articubot', task + '_val', folder_name)
     else:
-        directory = os.path.join('data_articubot', task + '_temp', folder_name)
+        directory = os.path.join('data_articubot', task, folder_name)
     if not os.path.exists(directory):
         os.makedirs(directory)
     
@@ -1156,7 +1156,8 @@ def fill_articubot(
                 #     continue
                 print(episode_keypoints[next_keypoint_idx])
                 obs = demo[i]
-                key_frame_obs = demo[episode_keypoints[next_keypoint_idx]]
+                keypoint = episode_keypoints[next_keypoint_idx]
+                key_frame_obs = demo[keypoint]
 
                 if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints):
                     next_keypoint_idx = next_keypoint_idx + 1
@@ -1164,14 +1165,9 @@ def fill_articubot(
 
                 if i >= episode_keypoints[next_keypoint_idx-1]:
                     frame_before_keypoint = demo[i]
-                    
 
-                
-
-                
-
-                obs_tp1 = demo[i]    # keypoint frame
-                obs_tm1 = demo[max(0, i - 1)]   # frame before keypoint
+                obs_tp1 = demo[keypoint]    # keypoint frame
+                obs_tm1 = demo[max(0, keypoint - 1)]   # frame before keypoint
                 (
                     trans_indicies,
                     rot_grip_indicies,
