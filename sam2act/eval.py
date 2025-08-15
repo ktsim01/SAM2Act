@@ -332,7 +332,6 @@ def eval(
                 record_enabled=False,
                 replay_ground_truth=replay_ground_truth,
                 high_level_policy=high_level_policy,
-                binary_high_level=binary_high_level,
                 gripper_high_level=gripper_high_level,
                 collision_high_level=collision_high_level,
                 rollout_articubot=rollout_articubot,
@@ -563,7 +562,8 @@ def _eval(args):
             agent_eval_log_dir = os.path.join(args.eval_log_dir, "final")
         
         high_level_policy = None
-        binary_high_level = None
+        gripper_high_level = None
+        collision_high_level = None
 
         if args.rollout_articubot:
             high_level_policy = ru.load_high_level_weighted_displacement_policy()

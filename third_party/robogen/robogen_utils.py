@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
 from torch.utils.data import DataLoader
-from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text
+from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text, PointNet2GripperBinary, DeltaGripperFiLM, PointPairTextFiLM, DeltaWidthTextFiLM
 from matplotlib import pyplot as plt
 import torch
 from termcolor import cprint
@@ -203,34 +203,84 @@ def get_goal_gripper_pos_eefs(actions, eef_pos, eef_quat, eef_qpos, closed_thres
     return expanded_goal_eef_pos, expanded_goal_eef_quat, expanded_goal_eef_qpos
 
 def load_high_level_weighted_displacement_policy():
+    ### Put Money In Safe
     # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-30_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Same as above but with weight adjusted
     # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-06-23_use_all_data_put_money_in_safe-obj_put_money_in_safe/model_100.pth' # No gripper nor collision
     # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-10_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # No gripper nor collision
     # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-15_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # Text embedding
-    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-18_use_all_data_put_money_in_safe-obj_use_color_new_dataset/best_model.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-18_use_all_data_put_money_in_safe-obj_use_color_new_dataset/best_model.pth'
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-23_use_all_data_put_money_in_safe-obj_use_color_use_text_more_epochs/best_model.pth' # MOre epochs
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-24_use_all_data_put_money_in_safe-obj_use_color_use_text_best_model/best_model.pth' # Best model
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-28_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_one_hot_and_reduction/best_model.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-30_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_colosseum/best_model.pth'
+    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-29_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_reduction_200/best_model.pth' # best one so far 7/31 84%
+    
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-08-06_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_/best_model.pth' # transforms
+    # load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-08_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_so2_aug_dataset_fix/best_model.pth'
+    # load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-09_use_all_data_put_money_in_safe-obj_one_hot_use_color_use_text_dataset_fix/best_model.pth'
+    
+    ### Reach and Drag
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-08-02_use_all_data_reach_and_drag-obj_one_hot_use_color_use_text_/best_model.pth'
+    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_one_hot_use_color_use_text_keyframe_fixed/best_model.pth'
+    load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-14_use_all_data_reach_and_drag-obj_one_hot_use_color_use_text_more_epochs/model_300.pth'
+    ### Place Cups
+    # load_model_path = '/home/ktsim/checkpoints/place_cups/pointnet2_super_model_invariant_2025-08-01_use_all_data_place_cups-obj_one_hot_use_color_use_text_new_task/best_model.pth'
     cprint(load_model_path, color='blue')
     # pointnet2_model = PointNet2_super(num_classes=13, input_channel=6, use_in=False).to('cuda')
-    pointnet2_model = PointNet2_text(num_classes=13, input_channel=6, use_text_embedding=True).to('cuda')
+    pointnet2_model = PointNet2_text(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
 
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
 
-def load_high_level_binary_prediction():
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-05_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_gripper_open_use_collision_put_money_in_safe/model_100.pth' # no weights
-    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-08_use_all_data_put_money_in_safe-obj_one_hot_use_gripper_open_use_collision_put_money_in_safe/model_100.pth' # weights
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-09_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # No text
-    # load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-16_use_all_data_put_money_in_safe-obj_use_color_put_money_in_safe/best_model.pth' # text embedding
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-07-17_use_all_data_put_money_in_safe-obj_use_color_no_gripper_pcd/best_model.pth'
-    load_model_path = '/home/ktsim/checkpoints/put_money_in_safe/pointnet2_super_model_invariant_2025-07-18_use_all_data_put_money_in_safe-obj_use_color_new_dataset/best_model.pth'
+def load_high_level_binary_prediction(gripper=False, collision=False):
 
-    ### Binary Prediciton
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-21_use_all_data_put_money_in_safe-obj_no_weight_use_color_use_text_binary_prediction/best_model.pth'
-    # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-07-21_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_text_binary_prediction/best_model.pth'
+    if collision:
+        ### Put Money in Safe
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/collision_pointnet2_binary_model_invariant_2025-08-13_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_color_use_text_action_corrected/best_model.pth'
+
+        ### Reach and Drag    
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_binary_model_invariant_2025-08-02_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_text/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/collision_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_text/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/collision_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_textkeyframe_fixed/best_model.pth'
+        load_model_path = '/home/ktsim/checkpoints/pointnet2_binary_model_invariant_2025-08-14_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_text_keyframe_fixed/best_collision_model.pth'
+        ### Place Cups
+        # load_model_path = '/home/ktsim/checkpoints/place_cups/pointnet2_binary_model_invariant_2025-08-01_use_all_data_place_cups-obj_one_hot_no_weight_use_color_use_textnew_task/best_model.pth'
+        pointnet2_model = PointNet2_Binary(num_classes=1, input_channel=9, use_text_embedding=True).to('cuda')
+
+
+    elif gripper:
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-12_use_all_data_put_money_in_safe-obj_no_weight_use_text_keyframes_goal_classifier/best_model.pth' # 84%, we should use this
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-13_use_all_data_put_money_in_safe-obj_one_hot_no_weight_use_color_use_textaction_corrected_goal_classifier/model_10.pth' # 80%
+        
+        ### Reach and Drag
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/binary_pointnet2_binary_model_invariant_2025-08-04_use_all_data_reach_and_drag-obj_no_weight_distance/best_model.pth' # best one so far
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-05_use_all_data_reach_and_drag-obj_one_hot_no_weight_distance_random/model_100.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-06_use_all_data_reach_and_drag-obj_one_hot_no_weight_distance/model_100.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-09_use_all_data_reach_and_drag-obj_no_weight_use_text_just_goal/model_50.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-09_use_all_data_reach_and_drag-obj_no_weight_use_text_just_goal_inconsistent/model_50.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-09_use_all_data_reach_and_drag-obj_no_weight_use_text_dataset_fix_just_goal/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_no_weight_use_textaction_corrected_goal_classifier/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_no_weight_use_textkeyframes_goal_classifier/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_text_/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-13_use_all_data_reach_and_drag-obj_no_weight_use_text_keyframes_fixed/best_model.pth'
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_binary_model_invariant_2025-08-14_use_all_data_reach_and_drag-obj_one_hot_no_weight_use_color_use_text_keyframe_fixed/best_gripper_model.pth'
+        load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-14_use_all_data_reach_and_drag-obj_no_weight_use_text_keyframes_fixed/model_50.pth'
+        
+        ### Place Cups
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/binary_pointnet2_binary_model_invariant_2025-08-04_use_all_data_place_cups-obj_no_weight_distance/best_model.pth'
+        # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-08-05_use_all_data_place_cups-obj_one_hot_no_weight_distance_random/model_100.pth'
+
+        # pointnet2_model = PointNet2_Binary(num_classes=1, input_channel=9, use_text_embedding=True).to('cuda')
+        # pointnet2_model = GripperDistanceClassifier().to('cuda')
+        # pointnet2_model = DeltaGripperFiLM().to('cuda')
+        # pointnet2_model = DeltaWidthTextFiLM().to('cuda')
+        # pointnet2_model = PointPairTextFiLM().to('cuda')
+        pointnet2_model = PointNet2GripperBinary(num_classes=1, input_channel=3, use_text_embedding=True).to('cuda')
+    
     cprint(load_model_path, color='yellow')
-    pointnet2_model = PointNet2_text(num_classes=15, input_channel=6, use_text_embedding=True).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
     return pointnet2_model
@@ -291,39 +341,75 @@ def run_high_level_policy_inference(policy, batch, text_embedding=None, return_w
     else:
         return outputs
 
-def run_high_level_policy_binary_inference(policy, batch, return_weights=False, text_embedding=None, gripper_open=None, collision=None):
+def collision_binary_inference(policy, batch, return_weights=False, text_embedding=None):
     policy.eval()
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :, :]
-    # goal_gripper_pcd = batch['goal_gripper_pcd'][:, -1, :, :]
+    goal_gripper_pcd = batch['goal_gripper_pcd'][:, -1, :, :]
 
-    inputs = torch.cat([pointcloud, gripper_pcd], dim=1).float()
+    inputs = torch.cat([pointcloud, gripper_pcd, goal_gripper_pcd], dim=1).float()
     inputs = inputs.to('cuda')
     inputs_ = inputs.permute(0, 2, 1)
     outputs = policy(inputs_, text_embedding)
     
-    weights = outputs[:, :-4, 0]
-    gripper_open = outputs [:, :-4, 1] # B
-    collision = outputs [:, :-4, 2] # B
-    weights = torch.nn.functional.softmax(weights, dim=1)
+    # weights = outputs[:, :-4, 0]
+    # gripper_open = outputs [:, :-4, 1] # B
+    # collision = outputs [:, :-4, 2] # B
+    # weights = torch.nn.functional.softmax(weights, dim=1)
 
-    # gripper_open = outputs[:, 0]
-    # collision = outputs[:, 1]
-
-    gripper_open = torch.sigmoid(gripper_open)
+    collision = outputs[:, 0]
     collision = torch.sigmoid(collision)
-
-    # Weighted average
-    gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
-    collision = (collision * weights).sum(dim=1, keepdim=True)
-
-    gripper_open = (gripper_open > 0.5).float()
     collision = (collision > 0.5).float()
+
+    return collision
+    
+    # Weighted average
+    # gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
+    # collision = (collision * weights).sum(dim=1, keepdim=True)
+
 
     # gripper_open = gripper_open.unsqueeze(1)
     # collision = collision.unsqueeze(1)
 
-    return gripper_open, collision
+    # return gripper_open, collision
+
+
+def gripper_binary_inference(policy, batch, return_weights=False, text_embedding=None):
+    policy.eval()
+    # pointcloud = batch['point_cloud'][:, -1, :, :]
+    # gripper_pcd = batch['gripper_pcd'].float() #[:, -1, :, :]
+    goal_gripper_pcd = batch['goal_gripper_pcd'].unsqueeze(0).to('cuda') #[:, -1, :, :]
+    centroid = torch.mean(goal_gripper_pcd, dim=1, keepdim=True) # B, 1, 3
+    goal_gripper_pcd = goal_gripper_pcd - centroid # B, 4
+    inputs = goal_gripper_pcd.float()
+
+    # inputs = torch.cat([pointcloud, goal_gripper_pcd], dim=1).float()
+    # distance = torch.norm(goal_gripper_pcd[:, 1, :3] - goal_gripper_pcd[:, 2, :3], keepdim=True, dim=1) # B, 1
+    inputs = inputs.to('cuda')
+    inputs_ = inputs.permute(0, 2, 1)
+    # outputs = policy(delta, goal_gripper_pcd, text_embedding)
+    outputs = policy(inputs_, text_embedding)
+
+    # weights = outputs[:, :-4, 0]
+    # gripper_open = outputs [:, :-4, 1] # B
+    # collision = outputs [:, :-4, 2] # B
+    # weights = torch.nn.functional.softmax(weights, dim=1)
+
+    gripper_open = outputs[:, 0]
+    gripper_open = torch.sigmoid(gripper_open)
+    gripper_open = (gripper_open > 0.5).float()
+    
+    return gripper_open
+
+    # Weighted average
+    # gripper_open = (gripper_open * weights).sum(dim=1, keepdim=True)
+    # collision = (collision * weights).sum(dim=1, keepdim=True)
+
+
+    # gripper_open = gripper_open.unsqueeze(1)
+    # collision = collision.unsqueeze(1)
+
+    # return gripper_open, collision
 
 def run_high_level_gmm_inference(policy, batch, return_weights=False, one_hot=False):
     pointcloud = batch['point_cloud'][:, -1, :, :]

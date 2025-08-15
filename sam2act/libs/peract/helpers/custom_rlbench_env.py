@@ -280,8 +280,8 @@ class CustomMultiTaskRLBenchEnv(MultiTaskRLBenchEnv):
         if self.eval:
             cam_placeholder = Dummy('cam_cinematic_placeholder')
             cam_base = Dummy('cam_cinematic_base')
-            cam_base.rotate([0, 0, np.pi * 0.75])
-            self._record_cam = VisionSensor.create([320, 180])
+            cam_base.rotate([0, 0, np.pi * 0.5])
+            self._record_cam = VisionSensor.create([640, 360])
             self._record_cam.set_explicit_handling(True)
             self._record_cam.set_pose(cam_placeholder.get_pose())
             self._record_cam.set_render_mode(RenderMode.OPENGL)

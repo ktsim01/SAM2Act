@@ -367,7 +367,7 @@ def _clip_encode_text(clip_model, text):
     return x, emb
 # add individual data points to a replay
 def _create_articubot_dataset(
-    task, obs, episode_num, sample_frame, key_frame_obs, frame_before_keyframe, action, lang_feats, val
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
 ):
     folder_name = 'episode_' + str(episode_num)
     print(episode_num, sample_frame)
@@ -1148,23 +1148,23 @@ def fill_articubot(
             # extract keypoints
             episode_keypoints = keypoint_discovery(demo)  # list of keypoint   [id0, id1, id2]
             next_keypoint_idx = 0
-            frame_before_keypoint = demo[0]
+            timestep = 0
+            # for i in episode_keypoints:
             for i in range(len(demo)):
                 # if not demo_augmentation and i > 0:
                 #     break
                 # if i % demo_augmentation_every_n != 0:  # choose only every n-th frame
                 #     continue
-                print(episode_keypoints[next_keypoint_idx])
                 obs = demo[i]
-                keypoint = episode_keypoints[next_keypoint_idx]
-                key_frame_obs = demo[keypoint]
 
-                if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints):
+                if i == episode_keypoints[next_keypoint_idx] and next_keypoint_idx < len(episode_keypoints)-1:
                     next_keypoint_idx = next_keypoint_idx + 1
-                    frame_before_keypoint = demo[episode_keypoints[next_keypoint_idx-1]]
 
-                if i >= episode_keypoints[next_keypoint_idx-1]:
-                    frame_before_keypoint = demo[i]
+                keypoint = episode_keypoints[next_keypoint_idx]
+
+                print(keypoint)
+
+                key_frame_obs = demo[keypoint]
 
                 obs_tp1 = demo[keypoint]    # keypoint frame
                 obs_tm1 = demo[max(0, keypoint - 1)]   # frame before keypoint
@@ -1228,8 +1228,9 @@ def fill_articubot(
                     obs_dict = reshape_dict_arrays_to_tensor(obs_dict)
                     _create_featurized_dataset(task, obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats, val=val)
                 else:
-                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, frame_before_keypoint, action, lang_feats, val=val)
-
+                    _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
+                
+                # timestep += 1
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it
                 # while (

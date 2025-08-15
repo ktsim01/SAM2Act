@@ -583,17 +583,17 @@ class PointNet2GripperBinary(nn.Module):
             use_in=False
         )
 
-        # if use_text_embedding:
-        #     self.text_encoder = nn.Linear(1024, self.encoded_text_dim)
-        #     self.film_predictor = nn.Sequential(
-        #         nn.Linear(self.encoded_text_dim, 128),
-        #         nn.ReLU(),
-        #         nn.Linear(128, 64 * 2)
-        #     )
-        #     self.film_predictor[-1].weight.data.zero_()
-        #     self.film_predictor[-1].bias.data.copy_(
-        #         torch.cat([torch.ones(64), torch.zeros(64)])
-        #     )
+        if use_text_embedding:
+            self.text_encoder = nn.Linear(1024, self.encoded_text_dim)
+            self.film_predictor = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, 64 * 2)
+            )
+            self.film_predictor[-1].weight.data.zero_()
+            self.film_predictor[-1].bias.data.copy_(
+                torch.cat([torch.ones(64), torch.zeros(64)])
+            )
 
         self.mlp = nn.Sequential(
             nn.Linear(64, 32),
@@ -608,13 +608,13 @@ class PointNet2GripperBinary(nn.Module):
 
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)  # Output: (B, 3, 4), (B, 64, 4)
 
-        # if self.use_text_embedding and text_embedding is not None:
-        #     encoded_text = self.text_encoder(text_embedding)  # (B, 128)
-        #     film_params = self.film_predictor(encoded_text)   # (B, 128)
-        #     gamma, beta = film_params.chunk(2, dim=1)
-        #     gamma = gamma.unsqueeze(2)
-        #     beta = beta.unsqueeze(2)
-        #     l1_points = gamma * l1_points + beta
+        if self.use_text_embedding and text_embedding is not None:
+            encoded_text = self.text_encoder(text_embedding)  # (B, 128)
+            film_params = self.film_predictor(encoded_text)   # (B, 128)
+            gamma, beta = film_params.chunk(2, dim=1)
+            gamma = gamma.unsqueeze(2)
+            beta = beta.unsqueeze(2)
+            l1_points = gamma * l1_points + beta
 
         x = torch.max(l1_points, dim=2)[0]  # Global max pooling: (B, 64)
         x = self.mlp(x)  # (B, num_classes)
@@ -624,16 +624,216 @@ class GripperDistanceClassifier(nn.Module):
     def __init__(self):
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(1, 16),
+            nn.Linear(3, 32),
             nn.ReLU(),
-            nn.Linear(16, 8),
+            nn.Linear(32, 16),
             nn.ReLU(),
-            nn.Linear(8, 1)  # Output logits for BCEWithLogitsLoss
+            nn.Linear(16, 1)  # Output logits for BCEWithLogitsLoss
         )
 
     def forward(self, distance):
         # distance: shape (B, 1)
         return self.mlp(distance)
+
+class DeltaGripperFiLM(nn.Module):
+    def __init__(self, text_dim=1024, encoded_text_dim=128, num_classes=1):
+        super().__init__()
+        
+        self.encoded_text_dim = encoded_text_dim
+        
+        # Per-point delta encoder (like a mini PointNet without abstraction)
+        # Input: (B, 3, 4) → Output: (B, 64, 4)
+        self.delta_encoder = nn.Sequential(
+            nn.Conv1d(3, 32, 1),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, 1),
+            nn.ReLU()
+        )
+        
+        # Text encoder
+        self.text_encoder = nn.Linear(text_dim, encoded_text_dim)
+        
+        # FiLM predictor
+        self.film_predictor = nn.Sequential(
+            nn.Linear(encoded_text_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64 * 2)  # gamma + beta
+        )
+        
+        # Initialize FiLM for identity modulation
+        self.film_predictor[-1].weight.data.zero_()
+        self.film_predictor[-1].bias.data.copy_(
+            torch.cat([torch.ones(64), torch.zeros(64)])
+        )
+        
+        # Classifier after pooling
+        self.mlp = nn.Sequential(
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, num_classes)  # 1 logit for BCE
+        )
+
+    def forward(self, delta, text_embedding):
+        """
+        delta: (B, 4, 3) gripper point deltas
+        text_embedding: (B, text_dim)
+        """
+        # (B, 4, 3) → (B, 3, 4) for Conv1d
+        delta = delta.transpose(1, 2)
+        
+        # Encode per-point features
+        delta_feat = self.delta_encoder(delta)  # (B, 64, 4)
+        
+        # Encode text
+        encoded_text = self.text_encoder(text_embedding)  # (B, encoded_text_dim)
+        
+        # Predict FiLM params
+        film_params = self.film_predictor(encoded_text)  # (B, 128)
+        gamma, beta = film_params.chunk(2, dim=1)        # (B, 64) each
+        
+        # Broadcast gamma/beta to all points
+        gamma = gamma.unsqueeze(-1)  # (B, 64, 1)
+        beta = beta.unsqueeze(-1)    # (B, 64, 1)
+        
+        # Apply FiLM
+        modulated_feat = gamma * delta_feat + beta  # (B, 64, 4)
+        
+        # Global max pool over points
+        pooled_feat = modulated_feat.max(dim=2)[0]  # (B, 64)
+        
+        # Classification
+        return self.mlp(pooled_feat)
+
+class DeltaWidthTextFiLM(nn.Module):
+    def __init__(self, text_dim=1024, encoded_text_dim=128, num_classes=1):
+        super().__init__()
+        
+        # Per-point delta encoder
+        self.delta_encoder = nn.Sequential(
+            nn.Conv1d(3, 32, 1),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, 1),
+            nn.ReLU()
+        )
+        
+        # Text encoder
+        self.text_encoder = nn.Linear(text_dim, encoded_text_dim)
+        
+        # FiLM predictor
+        self.film_predictor = nn.Sequential(
+            nn.Linear(encoded_text_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64 * 2)
+        )
+        
+        # Initialize FiLM as identity
+        self.film_predictor[-1].weight.data.zero_()
+        self.film_predictor[-1].bias.data.copy_(
+            torch.cat([torch.ones(64), torch.zeros(64)])
+        )
+        
+        # Width encoder (scalar → small feature vector)
+        self.width_encoder = nn.Sequential(
+            nn.Linear(1, 8),
+            nn.ReLU()
+        )
+        
+        # Classifier after pooling + width concat
+        self.mlp = nn.Sequential(
+            nn.Linear(64 + 8, 32),
+            nn.ReLU(),
+            nn.Linear(32, num_classes)  # 1 logit for BCE
+        )
+
+    def forward(self, delta, goal_width, text_embedding):
+        """
+        delta: (B, 4, 3) gripper point deltas
+        goal_width: (B, 1) scalar
+        text_embedding: (B, text_dim)
+        """
+        # Delta features
+        delta = delta.transpose(1, 2)  # (B, 3, 4)
+        delta_feat = self.delta_encoder(delta)  # (B, 64, 4)
+        
+        # Text → FiLM params
+        encoded_text = self.text_encoder(text_embedding)  # (B, encoded_text_dim)
+        film_params = self.film_predictor(encoded_text)   # (B, 128)
+        gamma, beta = film_params.chunk(2, dim=1)         # (B, 64) each
+        gamma = gamma.unsqueeze(-1)
+        beta = beta.unsqueeze(-1)
+        
+        # Apply FiLM
+        modulated_feat = gamma * delta_feat + beta  # (B, 64, 4)
+        
+        # Global max pooling over points
+        pooled_feat = modulated_feat.max(dim=2)[0]  # (B, 64)
+        
+        # Width encoding
+        width_feat = self.width_encoder(goal_width)  # (B, 8)
+        
+        # Fuse pooled delta features + width
+        fused = torch.cat([pooled_feat, width_feat], dim=1)  # (B, 64+8)
+        
+        # Classify
+        return self.mlp(fused)
+
+class PointPairTextFiLM(nn.Module):
+    def __init__(self, text_dim=1024, encoded_text_dim=128, num_classes=1):
+        super().__init__()
+        
+        self.point_encoder = nn.Sequential(
+            nn.Conv1d(5, 32, 1),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, 1),
+            nn.ReLU()
+        )
+        
+        self.text_encoder = nn.Linear(text_dim, encoded_text_dim)
+        
+        self.film_predictor = nn.Sequential(
+            nn.Linear(encoded_text_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64 * 2)
+        )
+        
+        self.film_predictor[-1].weight.data.zero_()
+        self.film_predictor[-1].bias.data.copy_(
+            torch.cat([torch.ones(64), torch.zeros(64)])
+        )
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, num_classes)
+        )
+
+    def forward(self, delta, goal, text_embedding):
+        """
+        delta: (B, 4, 5)
+        goal: (B, 4, 5)
+        text_embedding: (B, text_dim)
+        """
+        # Concatenate points from delta and goal
+        points = torch.cat([delta, goal], dim=1)  # (B, 8, 5)
+        points = points.transpose(1, 2)           # (B, 5, 8)
+        
+        # Encode
+        point_feat = self.point_encoder(points)   # (B, 64, 8)
+        
+        # Text → FiLM
+        encoded_text = self.text_encoder(text_embedding)  # (B, encoded_text_dim)
+        film_params = self.film_predictor(encoded_text)   # (B, 128)
+        gamma, beta = film_params.chunk(2, dim=1)         # (B, 64)
+        gamma = gamma.unsqueeze(-1)
+        beta = beta.unsqueeze(-1)
+        
+        # Apply FiLM
+        modulated_feat = gamma * point_feat + beta  # (B, 64, 8)
+        
+        # Global max pooling
+        pooled_feat = modulated_feat.max(dim=2)[0]  # (B, 64)
+        
+        return self.mlp(pooled_feat)
 
 
 class PointNet2_superplus(nn.Module):

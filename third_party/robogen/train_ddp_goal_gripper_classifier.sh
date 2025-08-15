@@ -4,7 +4,7 @@ set -euo pipefail
 # export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 CLUSTER="1-18"
-TASK="put_money_in_safe"
+TASK="reach_and_drag"
 
 # if [[ $CLUSTER == "1-18" ]]; then
 #     NP=8
@@ -44,19 +44,23 @@ NP=2
 BS=50
 EPOCHS=100
 EXP_PATH=/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps
-DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/data/put_money_in_safe_articubot
+DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/sam2act/data_articubot/reach_and_drag
+# DATASET_PREFIX=/home/ktsim/Projects/SAM2Act/sam2act/data_old/put_money_in_safe_text_filtered
+
 
 echo ${DATASET_PREFIX}/${TASK,,}/
 echo _${TASK}
 cd third_party/robogen/
-torchrun --standalone --nproc_per_node=$NP train_ddp_binary.py \
+torchrun --standalone --nproc_per_node=$NP train_goal_gripper_classifier.py \
     --batch_size $BS \
     --num_epochs $EPOCHS \
-    --model_type pointnet2_super --model_invariant \
+    --model_type pointnet2_binary --model_invariant \
     --exp_path $EXP_PATH \
     --num_train_objects $TASK \
     --dataset_prefix ${DATASET_PREFIX} \
-    --exp_name _${TASK} \
+    --exp_name keyframes_fixed \
     --use_all_data \
-    --use_color \
+    --using_weight 0 \
+    --use_text \
     --wandb
+

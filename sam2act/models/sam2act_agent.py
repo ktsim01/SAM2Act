@@ -934,8 +934,7 @@ class SAM2Act_Agent:
             out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         )
 
-        with open("output.txt", 'a') as f:
-            f.write(f'{pred_wpt}, {pred_rot_quat}, {pred_grip}, {pred_coll}\n')
+        print(pred_grip.item(), pred_coll.item())
 
         continuous_action = np.concatenate(
             (
@@ -970,7 +969,7 @@ class SAM2Act_Agent:
         
     @torch.no_grad()
     def act_with_articubot(
-        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, binary_high_level=None, gripper_high_level=None, collision_high_level=None, return_high_level_prediction=False
+        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, gripper_high_level=None, collision_high_level=None, return_high_level_prediction=False
     ) -> ActResult:
         if self.add_lang:
             lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
@@ -989,16 +988,43 @@ class SAM2Act_Agent:
 
         obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
 
-        obs_dict = _get_articubot_dataset(observation, add_rgb=True, add_one_hot=True, one_hot_dim=2)
+        obs_dict = _get_articubot_dataset(observation, add_rgb_ones=True, add_one_hot=True, one_hot_dim=2) # started using zeros for gripper pcd
         # obs_dict = _get_articubot_dataset(observation, add_rgb=True)
 
         subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
                                                                         return_weights=True, binary_prediction=False)
+        
         if True: # For binary predictions
+            # current_gripper_pcd = obs_dict['gripper_pcd'][..., :3].squeeze(0).to(self._device)
+            # current_gripper_pcd_one_hot = torch.zeros(current_gripper_pcd.shape[0], current_gripper_pcd.shape[1], 2).to(self._device)
+            # current_gripper_pcd_one_hot[:, :, 0] = 1
+            # current_gripper_pcd_ = torch.cat([current_gripper_pcd, current_gripper_pcd_one_hot], dim=2)
+            # obs_dict['gripper_pcd'] = current_gripper_pcd_.to(self._device)
             goal_gripper_pcd = subgoal_pred[:12].reshape(4,3)
+            # current_gripper_pcd = obs_dict['gripper_pcd'][..., :3].squeeze(0).to(self._device)
+
+            # delta = goal_gripper_pcd - current_gripper_pcd[..., :3].to(self._device)
+            # delta_one_hot = torch.zeros(delta.shape[0], delta.shape[1], 2).to(self._device)
+            # delta_one_hot[:, :, 0] = 1
+            # delta = torch.cat([delta, delta_one_hot], dim=2)
+            # current_gripper_pcd_one_hot = torch.zeros(current_gripper_pcd.shape[0], current_gripper_pcd.shape[1], 2).to(self._device)
+            # current_gripper_pcd_one_hot[:, :, 1] = 1
+            # current_gripper_pcd_ = torch.cat([current_gripper_pcd, current_gripper_pcd_one_hot], dim=2)
+            # obs_dict['delta'] = delta
+            # obs_dict['gripper_pcd'] = current_gripper_pcd_.to(self._device)            
+            
+
+            # gripper_pcd_one_hot = torch.zeros(goal_gripper_pcd.shape[0], 2).to(self._device)
+            # gripper_pcd_one_hot[:, 1] = 1
+            # goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, gripper_pcd_one_hot], dim=1)
+    
+            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd
+
+            gripper_open = ru.gripper_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats)
+
 
             # RGB
-            goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.zeros(goal_gripper_pcd.shape).to(self._device)], dim=-1)  # add ones for homogeneous coordinates
+            goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.ones(goal_gripper_pcd.shape).to(self._device)], dim=-1)  # add ones for homogeneous coordinates
             # goal_gripper_pcd = goal_gripper_pcd.unsqueeze(0).unsqueeze(0)
 
             # One hot
@@ -1007,19 +1033,21 @@ class SAM2Act_Agent:
             goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, goal_gripper_one_hot], dim=1)
             goal_gripper_pcd_ = goal_gripper_pcd_.unsqueeze(0).unsqueeze(0)
 
-            obs_dict = _get_articubot_dataset(observation, add_rgb=True, add_one_hot=True, one_hot_dim=3)
-            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd_.to('cpu')
+            obs_dict = _get_articubot_dataset(observation, add_rgb_ones=True, add_one_hot=True, one_hot_dim=3)
+            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd_.to(self._device)
 
             for key in obs_dict:
                 obs_dict[key] = obs_dict[key].to(self._device)
 
+            # gripper_open = ru.collision_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats)
+
             # gripper_open = ru.run_high_level_policy_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats, return_gripper=True)
-            collision = ru.run_high_level_policy_binary_inference(collision_high_level, obs_dict, text_embedding=lang_goal_feats, return_collision=True)
+            collision = ru.collision_binary_inference(collision_high_level, obs_dict, text_embedding=lang_goal_feats)
 
         # gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, text_embedding=lang_goal_feats, return_weights=False, binary_prediction=True)
 
 
-        # pred_grip = gripper_open
+        pred_grip = gripper_open
         pred_coll = collision
         
         pred_wpt, pred_rot_quat = ru.get_gripper_pos_orient_from_4_points(subgoal_pred[:12].reshape(4,3).detach().cpu().numpy())
@@ -1027,12 +1055,13 @@ class SAM2Act_Agent:
         temp_points = subgoal_pred[:12].reshape(4,3).detach().cpu().numpy()
         dist = np.linalg.norm(temp_points[1] - temp_points[2])
 
-        if dist < 0.08:
-            pred_grip = torch.tensor([0.0])
-            # pred_grip[0][0] = 0.0
-        else:
-            pred_grip = torch.tensor([1.0])
-            # pred_grip[0][0] = 1.0
+        print(dist)
+        # if dist < 0.08:
+        #     pred_grip = torch.tensor([0.0])
+        #     # pred_grip[0][0] = 0.0
+        # else:
+        #     pred_grip = torch.tensor([1.0])
+        #     # pred_grip[0][0] = 1.0
         # with open('output.txt', 'a') as f:
         #     print(dist, file=f)
 
@@ -1081,7 +1110,7 @@ class SAM2Act_Agent:
         # _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
         #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
         # )
-        # _, _, pred_grip, pred_coll = self.get_pred(
+        # pred_wpt, pred_rot_quat, _, _ = self.get_pred(
         #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         # )
 
