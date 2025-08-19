@@ -39,10 +39,7 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_Binary
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2GripperBinary
-        from third_party.robogen.test_PointNet2.model_invariant import GripperDistanceClassifier
-        from third_party.robogen.test_PointNet2.model_invariant import DeltaGripperFiLM
-        from third_party.robogen.test_PointNet2.model_invariant import PointPairTextFiLM
-        from third_party.robogen.test_PointNet2.model_invariant import DeltaWidthTextFiLM
+
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_large':
@@ -55,10 +52,6 @@ def train(args):
         elif args.model_type == 'pointnet2_binary':
             # model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm, use_text_embedding=True).to(device)
             model = PointNet2GripperBinary(num_classes=output_dim, input_channel=input_channel, use_text_embedding=args.use_text).to(device)
-            # model = GripperDistanceClassifier().to(device)
-            # model = DeltaGripperFiLM().to(device)
-            # model = DeltaWidthTextFiLM().to(device)
-            # model = PointPairTextFiLM().to(device)
         
         elif args.model_type == 'attn':
             model = AttnModel(num_classes=output_dim).to(device)

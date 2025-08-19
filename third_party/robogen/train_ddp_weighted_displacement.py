@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from third_party.robogen.test_PointNet2.dataset_from_disk import get_dataset_from_pickle, get_train_and_val_dataset_from_pickle
 import wandb
 from termcolor import cprint
+import numpy as np
 
 import sys
 sys.path.append('..')
@@ -19,6 +20,168 @@ def ddp_setup():
     init_process_group(backend="nccl", timeout=datetime.timedelta(seconds=5400))
     print("Local rank: ", os.environ["LOCAL_RANK"])
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+def add_gaussian_noise_torch(points, noise_magnitude=0.01):
+    device = points.device
+    noise = torch.randn_like(points) * noise_magnitude
+    return points + noise
+
+
+def apply_random_se3(pcd, max_translation=0.01, max_rotation_deg=10):
+    """
+    Applies a small random SE(3) transform to a point cloud.
+    Args:
+        pcd (torch.Tensor): (B, N, 3)
+        max_translation (float): max translation in meters
+        max_rotation_deg (float): max rotation in degrees
+    Returns:
+        transformed_pcd (torch.Tensor): (B, N, 3)
+    """
+    B, N, _ = pcd.shape
+    device = pcd.device
+
+    # Random translations
+    translations = (torch.rand(B, 3, device=device) - 0.5) * 2 * max_translation  # (B, 3)
+
+    # Random rotations
+    angles = (torch.rand(B, 3, device=device) - 0.5) * 2 * (max_rotation_deg / 180.0 * np.pi)  # (B, 3)
+    cos = torch.cos(angles)
+    sin = torch.sin(angles)
+
+    # Create rotation matrices for X, Y, Z axis
+    ones = torch.ones_like(cos[:, 0])
+    zeros = torch.zeros_like(cos[:, 0])
+
+    Rx = torch.stack([
+        torch.stack([ones, zeros, zeros], dim=1),
+        torch.stack([zeros, cos[:, 0], -sin[:, 0]], dim=1),
+        torch.stack([zeros, sin[:, 0], cos[:, 0]], dim=1)
+    ], dim=2)  # (B, 3, 3)
+
+    Ry = torch.stack([
+        torch.stack([cos[:, 1], zeros, sin[:, 1]], dim=1),
+        torch.stack([zeros, ones, zeros], dim=1),
+        torch.stack([-sin[:, 1], zeros, cos[:, 1]], dim=1)
+    ], dim=2)
+
+    Rz = torch.stack([
+        torch.stack([cos[:, 2], -sin[:, 2], zeros], dim=1),
+        torch.stack([sin[:, 2], cos[:, 2], zeros], dim=1),
+        torch.stack([zeros, zeros, ones], dim=1)
+    ], dim=2)
+
+    R = Rz @ Ry @ Rx  # Compose rotation matrices (B, 3, 3)
+
+    # Apply SE(3)
+    pcd_rotated = torch.bmm(pcd, R.transpose(1, 2))  # (B, N, 3)
+    pcd_transformed = pcd_rotated + translations.unsqueeze(1)  # (B, N, 3)
+
+    return pcd_transformed
+
+
+def apply_random_so2_y(pcd, gripper_pcd, goal_gripper_pcd, max_translation=0.01, max_rotation_deg=20):
+    """
+    Apply random SO(2) rotation around the Y-axis and small translation.
+    
+    Args:
+        pcd (torch.Tensor): (B, N, 3) scene pointcloud
+        max_translation (float): max translation in meters
+        max_rotation_deg (float): max rotation angle in degrees
+    Returns:
+        transformed_pcd (torch.Tensor): (B, N, 3)
+    """
+    B, N, _ = pcd.shape
+    device = pcd.device
+
+    # Random rotation angles θ around Y axis
+    theta = (torch.rand(B, device=device) - 0.5) * 2 * (max_rotation_deg / 180.0 * np.pi)  # (B,)
+    cos_theta = torch.cos(theta)
+    sin_theta = torch.sin(theta)
+
+    # Construct rotation matrix (Y-axis)
+    R = torch.zeros(B, 3, 3, device=device)
+    R[:, 0, 0] = cos_theta
+    R[:, 0, 2] = sin_theta
+    R[:, 1, 1] = 1.0
+    R[:, 2, 0] = -sin_theta
+    R[:, 2, 2] = cos_theta
+
+    # Apply rotation
+    rotated_pcd = torch.bmm(pcd, R.transpose(1, 2))  # (B, N, 3)
+    rotated_gripper_pcd = torch.bmm(gripper_pcd, R.transpose(1, 2))  # (B, 4, 3)
+    rotated_goal_gripper_pcd = torch.bmm(goal_gripper_pcd, R.transpose(1, 2))  # (B, 4, 3)
+
+    # Apply small random translation
+    translations = (torch.rand(B, 3, device=device) - 0.5) * 2 * max_translation  # (B, 3)
+    translated_pcd = rotated_pcd + translations.unsqueeze(1)
+    translated_gripper_pcd = rotated_gripper_pcd + translations.unsqueeze(1)  # (B, 4, 3)
+    translated_goal_gripper_pcd = rotated_goal_gripper_pcd + translations.unsqueeze(1)  # (B, 4, 3)
+
+    return translated_pcd, translated_gripper_pcd, translated_goal_gripper_pcd
+
+def apply_random_so2_z(pcd, gripper_pcd, goal_gripper_pcd, max_translation=0.01, max_rotation_deg=20):
+    """
+    Apply random SO(2) rotation around the Z-axis and small translation.
+
+    Args:
+        pcd (torch.Tensor): (B, N, 3)
+        max_translation (float): max translation in meters
+        max_rotation_deg (float): max rotation in degrees
+
+    Returns:
+        torch.Tensor: transformed point cloud of shape (B, N, 3)
+    """
+    B, N, _ = pcd.shape
+    device = pcd.device
+
+    # Random rotation angles θ around Z axis
+    theta = (torch.rand(B, device=device) - 0.5) * 2 * (max_rotation_deg / 180.0 * np.pi)  # (B,)
+    cos_theta = torch.cos(theta)
+    sin_theta = torch.sin(theta)
+
+    # Construct rotation matrices Rz for each batch element
+    R = torch.zeros(B, 3, 3, device=device)
+    R[:, 0, 0] = cos_theta
+    R[:, 0, 1] = -sin_theta
+    R[:, 1, 0] = sin_theta
+    R[:, 1, 1] = cos_theta
+    R[:, 2, 2] = 1.0
+
+    # Apply rotation
+    rotated = torch.bmm(pcd, R.transpose(1, 2))  # (B, N, 3)
+    rotated_gripper = torch.bmm(gripper_pcd, R.transpose(1, 2))  # (B, 4, 3)
+    rotated_goal_gripper = torch.bmm(goal_gripper_pcd, R.transpose(1, 2))  # (B, 4, 3)
+
+    # Apply small random translation
+    translation = (torch.rand(B, 3, device=device) - 0.5) * 2 * max_translation  # (B, 3)
+    translated = rotated + translation.unsqueeze(1)
+    translated_gripper = rotated_gripper + translation.unsqueeze(1)  # (B, 4, 3)
+    translated_goal_gripper = rotated_goal_gripper + translation.unsqueeze(1)  # (B, 4, 3)
+
+    return translated, translated_gripper, translated_goal_gripper
+
+import glob
+import re
+def find_latest_checkpoint(directory):
+    # Pattern: model_<number>.pth
+    checkpoint_files = glob.glob(os.path.join(directory, "model_*.pth"))
+    
+    if not checkpoint_files:
+        return None, 0  # No checkpoints
+
+    # Extract epoch number and pick the highest
+    pattern = re.compile(r"model_(\d+)\.pth$")
+    max_epoch = 0
+    latest_ckpt = None
+    for ckpt in checkpoint_files:
+        match = pattern.search(ckpt)
+        if match:
+            epoch = int(match.group(1))
+            if epoch > max_epoch:
+                max_epoch = epoch
+                latest_ckpt = ckpt
+
+    return latest_ckpt, max_epoch
 
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
@@ -74,7 +237,12 @@ def train(args):
         else:
             raise ValueError(f"model_type {args.model_type} not recognized")
     
+    loaded_epoch = None
     if args.load_model_path is not None:
+        match = re.search(r'model_(\d+)\.pth$', args.load_model_path)
+        if match:
+            loaded_epoch = int(match.group(1))
+            print(f"Loading model from epoch {loaded_epoch}...")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
         print("Successfully load model from: ", args.load_model_path)
     
@@ -133,11 +301,26 @@ def train(args):
 
     if args.use_text:
         output_dir = output_dir + "_use_text"
+
+    if args.gmm:
+        output_dir = output_dir + "_gmm"
+    
+    if args.so2:
+        output_dir = output_dir + "_so2"
         
     output_dir += "_" + args.exp_name
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
+    if loaded_epoch is not None:
+        latest_epoch = loaded_epoch
+    else:
+        latest_ckpt, latest_epoch = find_latest_checkpoint(args.exp_path)
+        
+        if latest_ckpt is not None:
+            print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
+            model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+            print("Successfully loaded model from: ", latest_ckpt)
 
     gpu_id = int(os.environ["LOCAL_RANK"])
     model = DDP(model, device_ids=[gpu_id])
@@ -223,6 +406,10 @@ def train(args):
     min_val_loss = float('inf')
 
     for epoch in range(args.num_epochs):
+        if epoch < latest_epoch:
+            print(f"Skipping epoch {epoch + 1} as it is less than the latest epoch {latest_epoch}")
+            continue
+
         running_loss = 0.0
         accumulated_displacement_loss = 0.0
         accumulated_weighting_loss = 0.0
@@ -238,6 +425,19 @@ def train(args):
             # gripper_pcd_history: B, H, 4, 3
             # calculate the displacement from every point to the gripper to get the labels with shape B, N, 4, 3
             
+
+            ### SO2 Augmentation
+            if args.so2:
+                pointcloud_transformed, gripper_pcd_transformed, goal_gripper_pcd_transformed = apply_random_so2_z(pointcloud[..., :3], gripper_pcd, goal_gripper_pcd, max_translation=0.1, max_rotation_deg=360)
+
+                # pointcloud_transformed = add_gaussian_noise_torch(pointcloud_transformed)
+                pointcloud[..., :3] = pointcloud_transformed
+                gripper_pcd = gripper_pcd_transformed
+                goal_gripper_pcd = goal_gripper_pcd_transformed
+
+
+            # gripper_pcd = add_gaussian_noise_torch(gripper_pcd)
+
             if args.use_color:
                 gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
             else:
@@ -288,34 +488,70 @@ def train(args):
                 inputs = inputs[:, :, :-4]
                 N = N - 4
 
-            loss = criterion(outputs, labels)
-            accumulated_displacement_loss += loss.item()
+            if args.gmm:
+                diff = outputs - labels  # Shape: (B, N, 12)
+                fixed_variance = args.fixed_variance
+                exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
+                log_gaussians = exponent 
 
-            if args.using_weight:
-                inputs = inputs.permute(0, 2, 1)
-                if not args.predict_two_goals:
-                    outputs = outputs.view(B, N, 4, 3)
-                else:
-                    outputs = outputs.view(B, N, 8, 3)
-                outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
+                # Compute log mixing coefficients
+                log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
+                log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-10)  # Prevent extreme values
 
-                # softmax the weights
-                weights = torch.nn.functional.softmax(weights, dim=1)
+                max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
+                log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
                 
-                # sum the displacement of the predicted gripper point cloud according to the weights
-                outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                outputs = outputs.sum(dim=1)
-                avg_loss = criterion(outputs, gripper_points.to(device))
+                loss = -torch.mean(log_probs) # mean of the negative log likelihood
+                accumulated_displacement_loss += loss.item()
+            
+            else:
+                loss = criterion(outputs, labels)
+                accumulated_displacement_loss += loss.item()
 
-                loss = loss + avg_loss * args.weight_loss_weight
-                accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
+                if args.using_weight:
+                    inputs = inputs.permute(0, 2, 1)
+                    if not args.predict_two_goals:
+                        outputs = outputs.view(B, N, 4, 3)
+                    else:
+                        outputs = outputs.view(B, N, 8, 3)
+                    outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
+
+                    # softmax the weights
+                    weights = torch.nn.functional.softmax(weights, dim=1)
+                    
+                    # sum the displacement of the predicted gripper point cloud according to the weights
+                    outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
+                    outputs = outputs.sum(dim=1)
+                    avg_loss = criterion(outputs, gripper_points.to(device))
+
+                    loss = loss + avg_loss * args.weight_loss_weight
+                    accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
 
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
 
-            if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
+            if args.gmm:
+                log_interval = len(train_dataloader) // 6
+                if (i+1) % log_interval == 0 and os.environ['LOCAL_RANK'] == '0':
+                    print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / log_interval}")
+                    
+                    log_info = {
+                        "epoch": epoch + 1,
+                        "global_step": global_step,
+                        "total_loss": running_loss / log_interval,
+                        "displacement_loss": accumulated_displacement_loss / log_interval,
+                        "weighting_loss": accumulated_weighting_loss / log_interval,
+                    }
+                    if args.wandb:
+                        wandb_run.log(log_info, step=global_step)
+
+                    running_loss = 0.0
+                    accumulated_displacement_loss = 0.0
+                    accumulated_weighting_loss = 0.0
+            else:
+                if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
+                    print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
                 
                 log_info = {
                     "epoch": epoch + 1,
@@ -325,13 +561,6 @@ def train(args):
                     "weighting_loss": accumulated_weighting_loss / 1000,
 
                 }
-
-                if args.wandb:
-                    wandb_run.log(log_info, step=global_step)
-
-                running_loss = 0.0
-                accumulated_displacement_loss = 0.0
-                accumulated_weighting_loss = 0.0
 
             global_step += 1
 
@@ -378,15 +607,24 @@ def train(args):
                         outputs = outputs.view(B, N, 4, 3)
                     else:
                         outputs = outputs.view(B, N, 8, 3)
-                    outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
 
                     # softmax the weights
                     weights = torch.nn.functional.softmax(weights, dim=1)
-                    
-                    # sum the displacement of the predicted gripper point cloud according to the weights
-                    outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                    outputs = outputs.sum(dim=1)
-                    accumulated_val_loss += criterion(outputs, gripper_points.to(device))
+
+                    if args.gmm:
+                        sampled_index = torch.argmax(weights, dim=1) # B, 1
+                        batch_indices = torch.arange(B, device=device) # B,
+                        displacement_mean = outputs[batch_indices, sampled_index, :, :] # B, 4, 3
+                        input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
+                        prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
+                        accumulated_val_loss += criterion(prediction, gripper_points.to(device))
+                    else:
+                        outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
+
+                        # sum the displacement of the predicted gripper point cloud according to the weights
+                        outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
+                        outputs = outputs.sum(dim=1)
+                        accumulated_val_loss += criterion(outputs, gripper_points.to(device))
             
             torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
             accumulated_val_loss = accumulated_val_loss.item()
@@ -452,7 +690,9 @@ def parse_args():
     parser.add_argument('--use_color', action='store_true')
     parser.add_argument('--wandb', action='store_true', help="Whether to use wandb for logging")
     parser.add_argument('--use_text', action='store_true', help="Whether to use text input")
-
+    parser.add_argument('--gmm', action='store_true', help="Whether to use GMM loss")
+    parser.add_argument('--so2', action='store_true', help="Whether to use SO2 augmentation")
+    parser.add_argument('--fixed_variance', type=float, default=0.05)
 
     return parser.parse_args()
 

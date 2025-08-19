@@ -240,10 +240,6 @@ def eval(
     verbose=True,
     save_video=False,
     rollout_articubot=False,
-    high_level_policy=None,
-    binary_high_level=None,
-    gripper_high_level=None,
-    collision_high_level=None,
 ):
     
     agent.eval()
@@ -297,7 +293,7 @@ def eval(
         csv_file = "eval_results.csv"
         if not os.path.exists(os.path.join(log_dir, csv_file)):
             with open(os.path.join(log_dir, csv_file), "w") as csv_fp:
-                fieldnames = ["task", "success rate", "length", "total_transitions"]
+                fieldnames = ["task", "epoch", "success rate", "length", "total_transitions"]
                 csv_writer = csv.DictWriter(csv_fp, fieldnames=fieldnames)
                 csv_writer.writeheader()
 
@@ -314,50 +310,62 @@ def eval(
     step_signal = Value("i", -1)
 
     scores = []
-    for task_id in range(num_tasks):
-        task_rewards = []
-        for ep in range(start_episode, start_episode + eval_episodes):
-            agent._network.mvt1.reset_memory_bank()
-            agent._network.mvt2.reset_memory_bank()
-
-            episode_rollout = []
-            generator = rollout_generator.generator(
-                step_signal=step_signal,
-                env=eval_env,
-                agent=agent,
-                episode_length=episode_length,
-                timesteps=1,
-                eval=True,
-                eval_demo_seed=ep,
-                record_enabled=False,
-                replay_ground_truth=replay_ground_truth,
-                high_level_policy=high_level_policy,
-                gripper_high_level=gripper_high_level,
-                collision_high_level=collision_high_level,
-                rollout_articubot=rollout_articubot,
-            )
-            try:
-                for replay_transition in generator:
-                    episode_rollout.append(replay_transition)
-            except StopIteration as e:
-                continue
-            except Exception as e:
-                eval_env.shutdown()
-                raise e
-
-            for transition in episode_rollout:
-                stats_accumulator.step(transition, True)
-                current_task_id = transition.info["active_task_id"]
-                assert current_task_id == task_id
-
+    for epoch_number in range(100, 500, 10):  
+        for task_id in range(num_tasks):
+            task_rewards = []
             task_name = tasks[task_id]
-            reward = episode_rollout[-1].reward
-            task_rewards.append(reward)
-            lang_goal = eval_env._lang_goal
-            if verbose:
-                print(
-                    f"Evaluating {task_name} | Episode {ep} | Score: {reward} | Episode Length: {len(episode_rollout)} | Lang Goal: {lang_goal}"
+            high_level_policy = ru.load_high_level_weighted_displacement_policy(task_name=task_name, epoch=epoch_number)
+            gripper_high_level = ru.load_high_level_binary_prediction(gripper=True, task_name=task_name, epoch=epoch_number)
+            collision_high_level = ru.load_high_level_binary_prediction(collision=True, task_name=task_name, epoch=epoch_number)      
+
+            for ep in range(start_episode, start_episode + eval_episodes):
+                agent._network.mvt1.reset_memory_bank()
+                agent._network.mvt2.reset_memory_bank()
+
+                episode_rollout = []
+                generator = rollout_generator.generator(
+                    step_signal=step_signal,
+                    env=eval_env,
+                    agent=agent,
+                    episode_length=episode_length,
+                    timesteps=1,
+                    eval=True,
+                    eval_demo_seed=ep,
+                    record_enabled=False,
+                    replay_ground_truth=replay_ground_truth,
+                    high_level_policy=high_level_policy,
+                    gripper_high_level=gripper_high_level,
+                    collision_high_level=collision_high_level,
+                    rollout_articubot=rollout_articubot,
                 )
+                try:
+                    for replay_transition in generator:
+                        episode_rollout.append(replay_transition)
+                except StopIteration as e:
+                    continue
+                except Exception as e:
+                    # eval_env.shutdown()
+                    task_rewards.append(0)
+                    lang_goal = eval_env._lang_goal
+                    if verbose:
+                        print(
+                            f"Evaluating {task_name} | Episode {ep} | Score: {reward} | Episode Length: {len(episode_rollout)} | Lang Goal: {lang_goal}"
+                        )
+                    continue
+                    raise e
+
+                for transition in episode_rollout:
+                    stats_accumulator.step(transition, True)
+                    current_task_id = transition.info["active_task_id"]
+                    assert current_task_id == task_id
+
+                reward = episode_rollout[-1].reward
+                task_rewards.append(reward)
+                lang_goal = eval_env._lang_goal
+                if verbose:
+                    print(
+                        f"Evaluating {task_name} | Episode {ep} | Score: {reward} | Episode Length: {len(episode_rollout)} | Lang Goal: {lang_goal}"
+                    )
 
         # report summaries
         summaries = []
@@ -366,9 +374,9 @@ def eval(
         if logging:
             # writer csv first
             with open(os.path.join(log_dir, csv_file), "a") as csv_fp:
-                fieldnames = ["task", "success rate", "length", "total_transitions"]
+                fieldnames = ["task", "epoch", "success rate", "length", "total_transitions"]
                 csv_writer = csv.DictWriter(csv_fp, fieldnames=fieldnames)
-                csv_results = {"task": task_name}
+                csv_results = {"task": task_name, "epoch": epoch_number}
                 for s in summaries:
                     if s.name == "eval_envs/return":
                         csv_results["success rate"] = s.value
@@ -560,16 +568,7 @@ def _eval(args):
                 use_input_place_with_mean=args.use_input_place_with_mean,
             )
             agent_eval_log_dir = os.path.join(args.eval_log_dir, "final")
-        
-        high_level_policy = None
-        gripper_high_level = None
-        collision_high_level = None
 
-        if args.rollout_articubot:
-            high_level_policy = ru.load_high_level_weighted_displacement_policy()
-            gripper_high_level = ru.load_high_level_binary_prediction(gripper=True)
-            collision_high_level = ru.load_high_level_binary_prediction(collision=True)      
-        
         os.makedirs(agent_eval_log_dir, exist_ok=True)
         scores = eval(
             agent=agent,
@@ -586,9 +585,6 @@ def _eval(args):
             verbose=True,
             save_video=args.save_video,
             rollout_articubot=args.rollout_articubot,
-            high_level_policy=high_level_policy,
-            gripper_high_level=gripper_high_level,
-            collision_high_level=collision_high_level,
         )
         print(f"model {model_path}, scores {scores}")
         task_scores = {}
