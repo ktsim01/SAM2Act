@@ -26,7 +26,7 @@ from peract_colab.arm.optim.lamb import Lamb
 from yarr.agents.agent import ActResult
 from sam2act.utils.dataset import _clip_encode_text
 from sam2act.utils.lr_sched_utils import GradualWarmupScheduler
-from sam2act.utils.dataset import _get_articubot_dataset
+from sam2act.utils.dataset import _get_articubot_dataset, _get_featurized_dataset, backproject_sam2_features_to_3d, furthest_point_sampling
 import third_party.robogen.robogen_utils as ru
 
 def eval_con(gt, pred):
@@ -968,6 +968,262 @@ class SAM2Act_Agent:
             return ActResult(continuous_action)
         
     @torch.no_grad()
+    def act_with_sam2features(
+        self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, gripper_high_level=None, collision_high_level=None, return_high_level_prediction=False
+    ) -> ActResult:
+        if self.add_lang:
+            lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
+            lang_goal_feats, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
+            lang_goal_embs = lang_goal_embs.float()
+            lang_goal_feats = lang_goal_feats.float()
+        else:
+            lang_goal_embs = (
+                torch.zeros(observation["lang_goal_embs"].shape)
+                .float()
+                .to(self._device)
+            )
+
+
+        proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
+
+        obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
+
+        pc, img_feat = rvt_utils.get_pc_img_feat(
+            obs,
+            pcd,
+        )
+
+        pc, img_feat = rvt_utils.move_pc_in_bound(
+            pc, img_feat, self.scene_bounds, no_op=not self.move_pc_in_bound
+        )
+
+        img = self._network.render(
+                    pc=pc,
+                    img_feat=img_feat,
+                    img_aug=0,
+                    mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+        out = self._network.mvt1(
+                img=img,
+                proprio=proprio,
+                lang_emb=None,
+                wpt_local=None,
+                rot_x_y=None,
+                # hm_gt=hm_gt,
+        ) # 3, 32, 64, 64
+
+
+        upsample = torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+
+        out = upsample[0](out) # 3, 32, 128, 128
+        # front_point_cloud, front_feature = backproject_sam2_features_to_3d(out[0], observation['front_depth'].reshape(-1, *observation['front_depth'].shape[4:]), observation['front_camera_intrinsics'].reshape(-1, *observation['front_camera_intrinsics'].shape[3:]), observation['front_camera_extrinsics'].reshape(-1, *observation['front_camera_extrinsics'].shape[3:])) # N, 32
+        # left_point_cloud, left_feature = backproject_sam2_features_to_3d(out[1], observation['left_shoulder_depth'].reshape(-1, *observation['left_shoulder_depth'].shape[4:]), observation['left_shoulder_camera_intrinsics'].reshape(-1, *observation['left_shoulder_camera_intrinsics'].shape[3:]), observation['left_shoulder_camera_extrinsics'].reshape(-1, *observation['left_shoulder_camera_extrinsics'].shape[3:])) # N, 32
+        # right_point_cloud, right_feature = backproject_sam2_features_to_3d(out[2], observation['right_shoulder_depth'].reshape(-1, *observation['right_shoulder_depth'].shape[4:]), observation['right_shoulder_camera_intrinsics'].reshape(-1, *observation['right_shoulder_camera_intrinsics'].shape[3:]), observation['right_shoulder_camera_extrinsics'].reshape(-1, *observation['right_shoulder_camera_extrinsics'].shape[3:])) # N, 32
+
+        import open3d as o3d
+
+        def visualize(points):
+            points = points.detach().cpu().numpy()
+            point_geometry = o3d.geometry.PointCloud()
+            point_geometry.points = o3d.utility.Vector3dVector(points[..., :3])
+            o3d.visualization.draw_geometries([point_geometry])
+
+
+        front_point_cloud, front_feature = backproject_sam2_features_to_3d(out[0], observation['front_depth'].squeeze(), observation['front_camera_intrinsics'].squeeze(), observation['front_camera_extrinsics'].squeeze()) # N, 32
+        left_point_cloud, left_feature = backproject_sam2_features_to_3d(out[1], observation['left_shoulder_depth'].squeeze(), observation['left_shoulder_camera_intrinsics'].squeeze(), observation['left_shoulder_camera_extrinsics'].squeeze()) # N, 32
+        right_point_cloud, right_feature = backproject_sam2_features_to_3d(out[2], observation['right_shoulder_depth'].squeeze(), observation['right_shoulder_camera_intrinsics'].squeeze(), observation['right_shoulder_camera_extrinsics'].squeeze()) # N, 32
+  
+        # front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs_dict['front_depth'].detach().cpu().numpy(),
+        #                                                                          obs_dict['left_shoulder_camera_extrinsics'].detach().cpu().numpy(),
+        #                                                                          obs_dict['left_shoulder_camera_intrinsics'].detach().cpu().numpy())
+        all_pcd = torch.concat([front_point_cloud, left_point_cloud, right_point_cloud], axis=0) #.detach().cpu().numpy()
+        all_features = torch.concat([front_feature, left_feature, right_feature], axis=0) #.detach().cpu().numpy()
+
+        x_range = (-2.06492364, 2.26651619)
+        y_range = (-0.96348435, 1.00034714)
+        z_range = (0.3, 1.72072086)
+
+        mask = (
+        (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+        (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+        (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+        )
+
+        np_points = all_pcd[mask]
+        np_rgb = all_features[mask]
+
+        fps = furthest_point_sampling(np_points, 10000)
+        np_points = np_points[fps]
+        np_rgb = np_rgb[fps]
+        points = torch.concat([np_points, np_rgb], axis=1).unsqueeze(0).to(self._device) # 1, 10000, 35
+        obs_dict = _get_featurized_dataset(points, observation)
+
+        subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
+                                                                        return_weights=True, binary_prediction=False)
+        # subgoal_pred = ru.run_high_level_gmm_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats, return_weights=False, one_hot=False)
+        if True: # For binary predictions
+            # current_gripper_pcd = obs_dict['gripper_pcd'][..., :3].squeeze(0).to(self._device)
+            # current_gripper_pcd_one_hot = torch.zeros(current_gripper_pcd.shape[0], current_gripper_pcd.shape[1], 2).to(self._device)
+            # current_gripper_pcd_one_hot[:, :, 0] = 1
+            # current_gripper_pcd_ = torch.cat([current_gripper_pcd, current_gripper_pcd_one_hot], dim=2)
+            # obs_dict['gripper_pcd'] = current_gripper_pcd_.to(self._device)
+            goal_gripper_pcd = subgoal_pred[:12].reshape(4,3)
+            # current_gripper_pcd = obs_dict['gripper_pcd'][..., :3].squeeze(0).to(self._device)
+
+            # delta = goal_gripper_pcd - current_gripper_pcd[..., :3].to(self._device)
+            # delta_one_hot = torch.zeros(delta.shape[0], delta.shape[1], 2).to(self._device)
+            # delta_one_hot[:, :, 0] = 1
+            # delta = torch.cat([delta, delta_one_hot], dim=2)
+            # current_gripper_pcd_one_hot = torch.zeros(current_gripper_pcd.shape[0], current_gripper_pcd.shape[1], 2).to(self._device)
+            # current_gripper_pcd_one_hot[:, :, 1] = 1
+            # current_gripper_pcd_ = torch.cat([current_gripper_pcd, current_gripper_pcd_one_hot], dim=2)
+            # obs_dict['delta'] = delta
+            # obs_dict['gripper_pcd'] = current_gripper_pcd_.to(self._device)            
+            
+
+            # gripper_pcd_one_hot = torch.zeros(goal_gripper_pcd.shape[0], 2).to(self._device)
+            # gripper_pcd_one_hot[:, 1] = 1
+            # goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, gripper_pcd_one_hot], dim=1)
+    
+            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd
+
+            gripper_open = ru.gripper_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats)
+
+
+            # RGB
+            goal_gripper_pcd = torch.cat([goal_gripper_pcd, torch.ones(goal_gripper_pcd.shape).to(self._device)], dim=-1)  # add ones for homogeneous coordinates
+            # goal_gripper_pcd = goal_gripper_pcd.unsqueeze(0).unsqueeze(0)
+
+            # One hot
+            goal_gripper_one_hot = torch.zeros(goal_gripper_pcd.shape[0], 3).to(self._device)
+            goal_gripper_one_hot[:, 2] = 1
+            goal_gripper_pcd_ = torch.cat([goal_gripper_pcd, goal_gripper_one_hot], dim=1)
+            goal_gripper_pcd_ = goal_gripper_pcd_.unsqueeze(0).unsqueeze(0)
+
+            obs_dict = _get_articubot_dataset(observation, add_rgb_ones=True, add_one_hot=True, one_hot_dim=3)
+            obs_dict['goal_gripper_pcd'] = goal_gripper_pcd_.to(self._device)
+
+            for key in obs_dict:
+                obs_dict[key] = obs_dict[key].to(self._device)
+
+            # gripper_open = ru.collision_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats)
+
+            # gripper_open = ru.run_high_level_policy_binary_inference(gripper_high_level, obs_dict, text_embedding=lang_goal_feats, return_gripper=True)
+            collision = ru.collision_binary_inference(collision_high_level, obs_dict, text_embedding=lang_goal_feats)
+
+        # gripper_open, collision = ru.run_high_level_policy_inference(binary_high_level, obs_dict, text_embedding=lang_goal_feats, return_weights=False, binary_prediction=True)
+
+
+        pred_grip = gripper_open
+        pred_coll = collision
+        
+        pred_wpt, pred_rot_quat = ru.get_gripper_pos_orient_from_4_points(subgoal_pred[:12].reshape(4,3).detach().cpu().numpy())
+
+        temp_points = subgoal_pred[:12].reshape(4,3).detach().cpu().numpy()
+        dist = np.linalg.norm(temp_points[1] - temp_points[2])
+
+        print(dist)
+        # if dist < 0.08:
+        #     pred_grip = torch.tensor([0.0])
+        #     # pred_grip[0][0] = 0.0
+        # else:
+        #     pred_grip = torch.tensor([1.0])
+        #     # pred_grip[0][0] = 1.0
+        # with open('output.txt', 'a') as f:
+        #     print(dist, file=f)
+
+        # print('Subgoal Pred:', subgoal_pred)
+        # print('pred_wpt and pred_rot_quat:', pred_wpt, pred_rot_quat)
+
+        # proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
+
+        # obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
+
+        # pc, img_feat = rvt_utils.get_pc_img_feat(
+        #     obs,
+        #     pcd,
+        # )
+
+        # pc, img_feat = rvt_utils.move_pc_in_bound(
+        #     pc, img_feat, self.scene_bounds, no_op=not self.move_pc_in_bound
+        # )
+
+        # # TODO: Vectorize
+        # pc_new = []
+        # rev_trans = []
+        # for _pc in pc:
+        #     a, b = mvt_utils.place_pc_in_cube(
+        #         _pc,
+        #         with_mean_or_bounds=self._place_with_mean,
+        #         scene_bounds=None if self._place_with_mean else self.scene_bounds,
+        #     )
+        #     pc_new.append(a)
+        #     rev_trans.append(b)
+        # pc = pc_new
+
+        # bs = len(pc)
+        # nc = self._net_mod.num_img
+        # h = w = self._net_mod.img_size
+        # dyn_cam_info = None
+
+        # out = self._network(
+        #     pc=pc,
+        #     img_feat=img_feat,
+        #     proprio=proprio,
+        #     lang_emb=lang_goal_embs,
+        #     img_aug=0,  # no img augmentation while acting
+        #     articubot=self.articubot,
+        # )
+        # _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
+        #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
+        # )
+        # pred_wpt, pred_rot_quat, _, _ = self.get_pred(
+        #     out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
+        # )
+
+        print(pred_grip.item(), pred_coll.item())
+        # print(pred_grip, pred_coll)
+
+        # import pickle
+        # output = {'prediction': subgoal_pred, 'weights': weights, 'pointcloud': obs_dict['point_cloud']}
+        # with open('debugging.pkl', 'wb') as f:
+        #     pickle.dump(output, f)
+        #     exit()
+
+        continuous_action = np.concatenate(
+            (
+                pred_wpt, #[0].cpu().numpy(),
+                pred_rot_quat,
+                pred_grip.detach().cpu().numpy(),
+                pred_coll.detach().cpu().numpy(),
+            )
+        )
+        if pred_distri:
+            x_distri = rot_grip_q[
+                0,
+                0 * self._num_rotation_classes : 1 * self._num_rotation_classes,
+            ]
+            y_distri = rot_grip_q[
+                0,
+                1 * self._num_rotation_classes : 2 * self._num_rotation_classes,
+            ]
+            z_distri = rot_grip_q[
+                0,
+                2 * self._num_rotation_classes : 3 * self._num_rotation_classes,
+            ]
+            return ActResult(continuous_action), (
+                x_distri.cpu().numpy(),
+                y_distri.cpu().numpy(),
+                z_distri.cpu().numpy(),
+            )
+        else:
+            if return_high_level_prediction:
+                return ActResult(continuous_action), subgoal_pred
+            else:
+                return ActResult(continuous_action)
+                   
+    @torch.no_grad()
     def act_with_articubot(
         self, step: int, observation: dict, deterministic=True, pred_distri=False, high_level_policy=None, gripper_high_level=None, collision_high_level=None, return_high_level_prediction=False
     ) -> ActResult:
@@ -988,12 +1244,12 @@ class SAM2Act_Agent:
 
         obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
 
-        obs_dict = _get_articubot_dataset(observation, add_rgb_ones=True, add_one_hot=True, one_hot_dim=2) # started using zeros for gripper pcd
+        obs_dict = _get_articubot_dataset(observation, add_rgb_ones=True, add_one_hot=True, one_hot_dim=2)
         # obs_dict = _get_articubot_dataset(observation, add_rgb=True)
 
         subgoal_pred, weights = ru.run_high_level_policy_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats,
                                                                         return_weights=True, binary_prediction=False)
-        
+        # subgoal_pred = ru.run_high_level_gmm_inference(high_level_policy, obs_dict, text_embedding=lang_goal_feats, return_weights=False, one_hot=False)
         if True: # For binary predictions
             # current_gripper_pcd = obs_dict['gripper_pcd'][..., :3].squeeze(0).to(self._device)
             # current_gripper_pcd_one_hot = torch.zeros(current_gripper_pcd.shape[0], current_gripper_pcd.shape[1], 2).to(self._device)

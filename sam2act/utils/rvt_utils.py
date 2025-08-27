@@ -224,6 +224,7 @@ def get_eval_parser():
     parser.add_argument("--use-input-place-with-mean", action="store_true")
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--rollout-articubot", action="store_true")
+    parser.add_argument("--rollout-sam2features", action="store_true")
     parser.add_argument("--skip", action="store_true")
 
     return parser

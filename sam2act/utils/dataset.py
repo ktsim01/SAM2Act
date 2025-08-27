@@ -365,7 +365,24 @@ def _clip_encode_text(clip_model, text):
     x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ clip_model.text_projection
 
     return x, emb
-# add individual data points to a replay
+
+def resample_to_fixed(x, rgb, target_points=5500):
+    """
+    x: numpy array of shape (N, C) for one point cloud
+       (N points, C features e.g. xyzrgb)
+    Returns: numpy array of shape (target_points, C)
+    """
+    N, C = x.shape
+    
+    if N == target_points:
+        return x
+    elif N > target_points:  # downsample
+        idx = np.random.choice(N, target_points, replace=False)
+    else:  # upsample with replacement
+        idx = np.random.choice(N, target_points, replace=True)
+    
+    return x[idx], rgb[idx]
+
 def _create_articubot_dataset(
     task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
 ):
@@ -700,7 +717,7 @@ def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
     """
     Args:
         features: [3, 32, H, W] tensor of SAM2 features (float32, GPU or CPU)
-        depths: [3, H, W] tensor of depth maps (float32, same device)
+        depths: [H, W] tensor of depth maps (float32, same device)
         intrinsics: [3, 3, 3] tensor of camera intrinsics (float32)
         extrinsics: [3, 4, 4] tensor of camera-to-world transforms (float32)
 
@@ -723,8 +740,8 @@ def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
     pixel_coords = torch.stack([uu, vv, ones], dim=0).reshape(3, -1).float()  # [3, H*W]
 
     K = intrinsics # [3, 3]
-    K_inv = torch.inverse(K)
-    T = extrinsics # [4, 4]
+    K_inv = torch.inverse(K).float()
+    T = extrinsics.float() # [4, 4]
 
     depth = depths.reshape(-1)  # [H*W]
 
@@ -838,8 +855,31 @@ def _get_articubot_dataset(obs, add_rgb_zeros=False, add_rgb_ones=False, add_one
     
     return obs_dict
 
+def _get_featurized_dataset(point_cloud, obs):
+    device = point_cloud.device
+    gripper_pose = obs['gripper_pose'][0][0].detach().cpu().numpy()
+    joint_pos = obs['gripper_joint_positions'][0][0].detach().cpu().numpy()
 
-def visualize(points, predictions):
+    gripper_pcd = np.expand_dims(get_4_points_from_gripper_pos_orient(gripper_pose[:3], gripper_pose[3:7], joint_pos[1]), axis=0)
+    gripper_pcd = torch.from_numpy(gripper_pcd).to(device)
+    gripper_pcd = torch.cat([gripper_pcd, torch.zeros((gripper_pcd.shape[0], gripper_pcd.shape[1], 32)).to(device)], dim=2)
+
+    pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], 2).to(device)
+    pointcloud_one_hot[:, :, 0] = 1
+    point_cloud = torch.cat([point_cloud, pointcloud_one_hot], dim=2)
+    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2).to(device)
+    gripper_pcd_one_hot[:, :, 1] = 1
+    gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+    
+    point_cloud = point_cloud.unsqueeze(0)
+    gripper_pcd = gripper_pcd.unsqueeze(0)
+    
+    obs_dict = {'point_cloud': point_cloud,
+                'gripper_pcd': gripper_pcd,}
+    
+    return obs_dict
+
+def visualize(points):
     point_geometry = o3d.geometry.PointCloud()
     print(points.shape)
     print(predictions.shape)

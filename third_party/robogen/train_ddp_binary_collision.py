@@ -301,17 +301,15 @@ def train(args):
         
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
-    if loaded_epoch is not None:
+
+    latest_ckpt, latest_epoch = find_latest_checkpoint(args.exp_path)
+
+    if latest_ckpt is not None:
+        print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
+        model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+        print("Successfully loaded model from: ", latest_ckpt)
+    elif loaded_epoch is not None:
         latest_epoch = loaded_epoch
-    else:
-        latest_ckpt, latest_epoch = find_latest_checkpoint(args.exp_path)
-
-        if latest_ckpt is not None:
-            print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
-            model.load_state_dict(torch.load(latest_ckpt, map_location=device))
-            print("Successfully loaded model from: ", latest_ckpt)
-
-
 
     gpu_id = int(os.environ["LOCAL_RANK"])
     model = DDP(model, device_ids=[gpu_id])

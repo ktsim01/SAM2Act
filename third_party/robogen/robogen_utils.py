@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
 from torch.utils.data import DataLoader
-from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text, PointNet2GripperBinary
+from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text, PointNet2GripperBinary, PointNet2_textV2, PointNet2_text_10k
 from matplotlib import pyplot as plt
 import torch
 from termcolor import cprint
@@ -302,18 +302,33 @@ def load_high_level_weighted_displacement_policy(task_name, epoch):
         load_model_path = '/home/ktsim/checkpoints/place_cups/pointnet2_super_model_invariant_2025-08-01_use_all_data_place_cups-obj_one_hot_use_color_use_text_new_task/best_model.pth'
     elif task_name == 'insert_onto_square_peg':
         # load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
-        load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-18_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_so2_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-18_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_so2_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-19/pointnet2_super_model_invariant_2025-08-19_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-20/pointnet2_super_model_invariant_2025-08-20_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k rest of the epochs
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-23/pointnet2_text_10k_model_invariant_2025-08-23_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k, modified model
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-24/pointnet2_textV2_model_invariant_2025-08-23_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_additional_film/model_{}.pth'.format(epoch) # with voxels, 5500 points, new architecture 
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-23/pointnet2_super_model_invariant_2025-08-23_use_all_data_insert_onto_square_peg-obj_one_hot_use_text_featurized_og_model/model_{}.pth'.format(epoch) # 10k, sam2feats
+        # load_model_path =  '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_text_featurized_new_model/model_{}.pth'.format(epoch) # 10k, sam2feats, modified model
+        load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k, modified model, more epochs
     elif task_name == 'place_shape_in_shape_sorter':
-        load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-19/pointnet2_super_model_invariant_2025-08-19_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k
+        load_model_path = '/home/ktsim/checkpoints/2025-08-20/pointnet2_super_model_invariant_2025-08-20_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k
+
     elif task_name == 'stack_cups':
-        load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_stack_cups-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_stack_cups-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        load_model_path = '/home/ktsim/checkpoints/pointnet2_super_model_invariant_2025-08-18_use_all_data_stack_cups-obj_one_hot_use_color_use_text_gmm_/model_{}.pth'.format(epoch)
     elif task_name == 'put_groceries_in_cupboard':
-        load_model_path = '/home/ktsim/checkpoints/2025-08-17/pointnet2_super_model_invariant_2025-08-16_use_all_data_put_groceries_in_cupboard-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-17/pointnet2_super_model_invariant_2025-08-16_use_all_data_put_groceries_in_cupboard-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        load_model_path = '/home/ktsim/checkpoints/2025-08-20/pointnet2_super_model_invariant_2025-08-19_use_all_data_put_groceries_in_cupboard-obj_one_hot_use_color_use_text_1000_epochs/model_{}.pth'.format(epoch)
     elif task_name == 'open_drawer':
         load_model_path = '/home/ktsim/checkpoints/2025-08-17/pointnet2_super_model_invariant_2025-08-17_use_all_data_open_drawer-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
     cprint(load_model_path, color='blue')
     # pointnet2_model = PointNet2_super(num_classes=13, input_channel=6, use_in=False).to('cuda')
-    pointnet2_model = PointNet2_text(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+    # pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=37, use_text_embedding=True).to('cuda')
+    pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+    # pointnet2_model = PointNet2_textV2(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+
 
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
@@ -335,13 +350,17 @@ def load_high_level_binary_prediction(gripper=False, collision=False, task_name=
             load_model_path = '/home/ktsim/checkpoints/place_cups/pointnet2_binary_model_invariant_2025-08-01_use_all_data_place_cups-obj_one_hot_no_weight_use_color_use_textnew_task/best_model.pth'
             load_model_path = '/home/ktsim/checkpoints/2025-08-17/pointnet2_super_model_invariant_2025-08-16_use_all_data_place_cups-obj_one_hot_use_color_use_text_gmm_trying_gmm/model_{}.pth'.format(epoch)
         elif task_name == 'insert_onto_square_peg':
-            load_model_path = '/home/ktsim/checkpoints/2025-08-16/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_insert_onto_square_peg-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            # load_model_path = '/home/ktsim/checkpoints/2025-08-16/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_insert_onto_square_peg-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            load_model_path = '/home/ktsim/checkpoints/2025-08-19/collision_pointnet2_binary_model_invariant_2025-08-19_use_all_data_insert_onto_square_peg-obj_one_hot_no_weight_use_color_use_text_/model_300.pth'.format(epoch) # 10k
+            # load_model_path = '/home/ktsim/checkpoints/2025-08-20/collision_pointnet2_binary_model_invariant_2025-08-20_use_all_data_insert_onto_square_peg-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch) # 10k rest of the epochs
         elif task_name == 'place_shape_in_shape_sorter':
-            load_model_path = '/home/ktsim/checkpoints/2025-08-16/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_place_shape_in_shape_sorter-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            # load_model_path = '/home/ktsim/checkpoints/2025-08-16/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_place_shape_in_shape_sorter-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            load_model_path = '/home/ktsim/checkpoints/2025-08-20/collision_pointnet2_binary_model_invariant_2025-08-20_use_all_data_place_shape_in_shape_sorter-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch) # 10k
         elif task_name == 'stack_cups':
             load_model_path = '/home/ktsim/checkpoints/2025-08-16/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_stack_cups-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
         elif task_name == 'put_groceries_in_cupboard':
-            load_model_path = '/home/ktsim/checkpoints/2025-08-17/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_put_groceries_in_cupboard-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            # load_model_path = '/home/ktsim/checkpoints/2025-08-17/collision_pointnet2_binary_model_invariant_2025-08-16_use_all_data_put_groceries_in_cupboard-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
+            load_model_path = '/home/ktsim/checkpoints/2025-08-20/collision_pointnet2_binary_model_invariant_2025-08-19_use_all_data_put_groceries_in_cupboard-obj_one_hot_no_weight_use_color_use_text_1000_epochs/model_{}.pth'.format(epoch)
         elif task_name == 'open_drawer':
             load_model_path  = '/home/ktsim/checkpoints/2025-08-17/collision_pointnet2_binary_model_invariant_2025-08-17_use_all_data_open_drawer-obj_one_hot_no_weight_use_color_use_text_/model_{}.pth'.format(epoch)
         pointnet2_model = PointNet2_Binary(num_classes=1, input_channel=9, use_text_embedding=True).to('cuda')
@@ -511,7 +530,7 @@ def gripper_binary_inference(policy, batch, return_weights=False, text_embedding
 
     # return gripper_open, collision
 
-def run_high_level_gmm_inference(policy, batch, return_weights=False, one_hot=False):
+def run_high_level_gmm_inference(policy, batch, text_embedding=None, return_weights=False, one_hot=False):
     pointcloud = batch['point_cloud'][:, -1, :, :]
     gripper_pcd = batch['gripper_pcd'][:, -1, :]
     inputs = torch.cat([pointcloud, gripper_pcd], dim=1)
@@ -521,9 +540,9 @@ def run_high_level_gmm_inference(policy, batch, return_weights=False, one_hot=Fa
         input_onehots[:, pointcloud.shape[1]:, 1] = 1
         inputs = torch.cat([inputs, input_onehots], dim=2)
 
-    inputs = inputs.to('cuda')
+    inputs = inputs.to('cuda').float()
     inputs_ = inputs.permute(0, 2, 1)
-    outputs = policy(inputs_)
+    outputs = policy(inputs_, text_embedding)
     weights = outputs[:, :-4, -1] # B, N
     outputs = outputs[:, :-4, :-1] # B, N, 12
     inputs = inputs[:, :-4, :3]

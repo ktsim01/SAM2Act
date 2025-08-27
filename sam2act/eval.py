@@ -85,7 +85,6 @@ def load_agent(
     eval_log_dir="",
     device=0,
     use_input_place_with_mean=False,
-    articubot=False,
 ):
     device = f"cuda:{device}"
 
@@ -182,7 +181,6 @@ def load_agent(
             sam2act = mvt_sam2.MVT_SAM2(
                 renderer_device=device,
                 rank=0,
-                articubot=articubot,
                 **mvt_cfg,
             )
 
@@ -240,6 +238,7 @@ def eval(
     verbose=True,
     save_video=False,
     rollout_articubot=False,
+    rollout_sam2features=False,
 ):
     
     agent.eval()
@@ -310,7 +309,7 @@ def eval(
     step_signal = Value("i", -1)
 
     scores = []
-    for epoch_number in range(100, 500, 10):  
+    for epoch_number in range(200, 330, 10):  
         for task_id in range(num_tasks):
             task_rewards = []
             task_name = tasks[task_id]
@@ -337,6 +336,7 @@ def eval(
                     gripper_high_level=gripper_high_level,
                     collision_high_level=collision_high_level,
                     rollout_articubot=rollout_articubot,
+                    rollout_sam2features=rollout_sam2features,
                 )
                 try:
                     for replay_transition in generator:
@@ -585,6 +585,7 @@ def _eval(args):
             verbose=True,
             save_video=args.save_video,
             rollout_articubot=args.rollout_articubot,
+            rollout_sam2features=args.rollout_sam2features,
         )
         print(f"model {model_path}, scores {scores}")
         task_scores = {}

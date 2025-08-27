@@ -95,7 +95,6 @@ class MVT_SAM2_Single(nn.Module):
         lora_r,
         ifSAM2,
         rank,
-        articubot,
         sam2_config,
         sam2_ckpt,
         use_memory,
@@ -204,8 +203,6 @@ class MVT_SAM2_Single(nn.Module):
         self.num_maskmem = num_maskmem
 
         self.curr_obs_idx = 0
-
-        self.articubot = articubot
 
         self.memory_bank_multiview = [{} for _ in range(3)] if self.rend_three_views else [{} for _ in range(5)]
 
@@ -656,6 +653,7 @@ class MVT_SAM2_Single(nn.Module):
         lang_emb=None,
         wpt_local=None,
         rot_x_y=None,
+        rollout_articubot=True,
         **kwargs,
     ):
         """
@@ -698,7 +696,7 @@ class MVT_SAM2_Single(nn.Module):
         self.sam2_vision_feats_all, self.sam2_vision_pos_embeds_all = self.sam2_image_encoder_forward(self.sam2, rgb_img)
         sam_out = self.sam2_vision_feats_all[-1].permute(1, 2, 0).view(bs*num_img, -1, *feat_sizes[-1])
 
-        if self.articubot:
+        if rollout_articubot:
             return self.sam2_vision_feats_all[0].permute(1, 2, 0).reshape(bs*num_img, -1, num_pat_img*4, num_pat_img*4).float()
 
         if num_pat_img == sam_out.shape[-1]:

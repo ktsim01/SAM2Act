@@ -197,8 +197,10 @@ class Scene(object):
 
         def get_rgb_depth(sensor: VisionSensor, get_rgb: bool, get_depth: bool,
                           get_pcd: bool, rgb_noise: NoiseModel,
-                          depth_noise: NoiseModel, depth_in_meters: bool):
+                          depth_noise: NoiseModel, depth_in_meters: bool,):
             rgb = depth = pcd = None
+            depth_m = None
+
             if sensor is not None and (get_rgb or get_depth):
                 sensor.handle_explicitly()
                 if get_rgb:
@@ -212,14 +214,13 @@ class Scene(object):
                         depth = depth_noise.apply(depth)
                 if get_pcd:
                     depth_m = depth
+                    # breakpoint()
                     if not depth_in_meters:
                         near = sensor.get_near_clipping_plane()
                         far = sensor.get_far_clipping_plane()
                         depth_m = near + depth * (far - near)
                     pcd = sensor.pointcloud_from_depth(depth_m)
-                    if not get_depth:
-                        depth = None
-            return rgb, depth, pcd
+            return rgb, depth_m, pcd
 
         def get_mask(sensor: VisionSensor, mask_fn):
             mask = None

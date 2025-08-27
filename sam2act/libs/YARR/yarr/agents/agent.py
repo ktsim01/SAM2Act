@@ -64,6 +64,12 @@ class Agent(ABC):
         # One of these must be 'action'.
         pass
 
+    @abstractmethod
+    def act_with_sam2features(self, step: int, observation: dict, deterministic: bool, high_level_policy) -> ActResult:
+        # returns dict of values that get put in the replay.
+        # One of these must be 'action'.
+        pass
+    
     def reset(self) -> None:
         pass
 

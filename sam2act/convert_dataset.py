@@ -268,6 +268,7 @@ def experiment(cmd_args, devices, rank, node_rank, world_size):
         only_train=True,
         sample_distribution_mode=exp_cfg.sample_distribution_mode,
         create_articubot_dataset=cmd_args.create_articubot_dataset,
+        sam2_features=cmd_args.sam2_features,
         val_dataset=cmd_args.val,
         args=cmd_args,
         # num_maskmem=mvt_cfg.num_maskmem,
@@ -400,6 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-dir", type=str, default="runs")
     parser.add_argument("--with-eval", action="store_true", default=False)
     parser.add_argument("--create-articubot-dataset", action="store_true", default=False)
+    parser.add_argument("--sam2-features", action="store_true", default=False)
     parser.add_argument("--val", action="store_true", default=False, help="create validation dataset")
 
 

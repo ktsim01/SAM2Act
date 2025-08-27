@@ -27,7 +27,8 @@ class RolloutGenerator(object):
                   high_level_policy=None,
                   gripper_high_level=None,
                   collision_high_level=None,
-                  rollout_articubot=False):            
+                  rollout_articubot=False,
+                  rollout_sam2features=False):            
         
         if eval:
             obs = env.reset_to_demo(eval_demo_seed)
@@ -52,9 +53,13 @@ class RolloutGenerator(object):
                 
                 # act_result = agent.act_with_articubot(step_signal.value, prepped_data,
                 #                     deterministic=eval, high_level_policy=high_level_policy, binary_high_level=binary_high_level)
-                
-                act_result, predictions = agent.act_with_articubot(step_signal.value, prepped_data,
-                    deterministic=eval, high_level_policy=high_level_policy, gripper_high_level=gripper_high_level, collision_high_level=collision_high_level, return_high_level_prediction=True)
+                if rollout_sam2features:
+                    act_result, predictions = agent.act_with_sam2features(step_signal.value, prepped_data,
+                        deterministic=eval, high_level_policy=high_level_policy, gripper_high_level=gripper_high_level, collision_high_level=collision_high_level, return_high_level_prediction=True)
+                else:
+                    act_result, predictions = agent.act_with_articubot(step_signal.value, prepped_data,
+                        deterministic=eval, high_level_policy=high_level_policy, gripper_high_level=gripper_high_level, collision_high_level=collision_high_level, return_high_level_prediction=True)
+
             else:
                 if step >= len(actions):
                     return
