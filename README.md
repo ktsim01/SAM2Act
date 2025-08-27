@@ -219,10 +219,14 @@ By default, we use task `put_block_back` in `configs/sam2act_plus.yaml`. You can
 WANDB_MODE="offline" torchrun --nproc_per_node="1" --nnodes="1"   convert_dataset.py   --exp_cfg_path configs/sam2act.yaml   --mvt_cfg_path mvt/configs/sam2act.yaml --create-articubot-dataset
 ```
 
+Add `--val` for validation set. Add `--sam2-features` to create dataset with sam2 features.
+
 ### Rolling Out with Articubot
 ```
 python eval.py   --model-folder runs/sam2act_rlbench   --eval-datafolder ./data/test   --tasks put_money_in_safe   --eval-episodes 5   --log-name test/1   --device 0   --headless   --model-name model_89.pth --save-video --rollout-articubot
 ```
+
+Add `--rollout-sam2features` to rollout with sam2 features.
 
 Don't forget to change the name of the task. It expects dataset in `sam2act/data/YOUR_TASK`.
 
