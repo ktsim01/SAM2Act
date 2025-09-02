@@ -222,6 +222,8 @@ def rgb_handles_to_mask(rgb_coded_handles):
   # Handle encoded as : handle = R + G * 256 + B * 256 * 256
   rgb_coded_handles *= 255  # takes rgb range to 0 -> 255
   rgb_coded_handles.astype(int)
+  return rgb_coded_handles
+  breakpoint()
   return (rgb_coded_handles[:, :, 0] +
           rgb_coded_handles[:, :, 1] * 256 +
           rgb_coded_handles[:, :, 2] * 256 * 256)

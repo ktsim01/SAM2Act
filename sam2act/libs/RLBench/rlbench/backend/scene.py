@@ -225,6 +225,7 @@ class Scene(object):
         def get_mask(sensor: VisionSensor, mask_fn):
             mask = None
             if sensor is not None:
+                sensor.set_explicit_handling(1)
                 sensor.handle_explicitly()
                 mask = mask_fn(sensor.capture_rgb())
             return mask
@@ -245,16 +246,17 @@ class Scene(object):
             self._cam_front, fc_ob.rgb, fc_ob.depth, fc_ob.point_cloud,
             fc_ob.rgb_noise, fc_ob.depth_noise, fc_ob.depth_in_meters)
 
+        # breakpoint()
         left_shoulder_mask = get_mask(self._cam_over_shoulder_left_mask,
-                                      lsc_mask_fn) if lsc_ob.mask else None
+                                      lsc_mask_fn) if True else None
         right_shoulder_mask = get_mask(self._cam_over_shoulder_right_mask,
-                                      rsc_mask_fn) if rsc_ob.mask else None
+                                      rsc_mask_fn) if True else None
         overhead_mask = get_mask(self._cam_overhead_mask,
                                  oc_mask_fn) if oc_ob.mask else None
         wrist_mask = get_mask(self._cam_wrist_mask,
-                              wc_mask_fn) if wc_ob.mask else None
+                              wc_mask_fn) if True else None
         front_mask = get_mask(self._cam_front_mask,
-                              fc_mask_fn) if fc_ob.mask else None
+                              fc_mask_fn) if True else None
 
         obs = Observation(
             left_shoulder_rgb=left_shoulder_rgb,

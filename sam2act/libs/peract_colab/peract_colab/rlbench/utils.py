@@ -45,6 +45,7 @@ def get_stored_demo(data_path, index):
     obs[i].left_shoulder_rgb = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_LS, IMAGE_RGB), IMAGE_FORMAT % i)))
     obs[i].right_shoulder_rgb = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_RS, IMAGE_RGB), IMAGE_FORMAT % i)))
     obs[i].wrist_rgb = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_WRIST, IMAGE_RGB), IMAGE_FORMAT % i)))
+    # obs[i].overhead_rgb = np.array(Image.open(os.path.join(episode_path, '%s_%s' % ('overhead', IMAGE_RGB), IMAGE_FORMAT % i)))
 
     obs[i].front_depth = image_to_float_array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_FRONT, IMAGE_DEPTH), IMAGE_FORMAT % i)), DEPTH_SCALE)
     near = obs[i].misc['%s_camera_near' % (CAMERA_FRONT)]
@@ -66,10 +67,17 @@ def get_stored_demo(data_path, index):
     far = obs[i].misc['%s_camera_far' % (CAMERA_WRIST)]
     obs[i].wrist_depth = near + obs[i].wrist_depth * (far - near)
 
-    # obs[i].front_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_FRONT, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,0]
-    # obs[i].left_shoulder_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_LS, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,0]
-    # obs[i].right_shoulder_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_RS, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,0]
-    # obs[i].wrist_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_WRIST, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,0]
+    # obs[i].overhead_depth = image_to_float_array(Image.open(os.path.join(episode_path, '%s_%s' % ('overhead', IMAGE_DEPTH), IMAGE_FORMAT % i)), DEPTH_SCALE)
+    # near = obs[i].misc['overhead_camera_near']
+    # far = obs[i].misc['overhead_camera_far']
+    # obs[i].overhead_depth = near + obs[i].overhead_depth * (far - near)
+
+    obs[i].front_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_FRONT, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,:]
+    obs[i].left_shoulder_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_LS, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,:]
+    obs[i].right_shoulder_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_RS, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,:]
+    obs[i].wrist_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % (CAMERA_WRIST, IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,:]
+    # obs[i].overhead_mask = np.array(Image.open(os.path.join(episode_path, '%s_%s' % ('overhead', IMAGE_MASK), IMAGE_FORMAT % i)))[:,:,:]
+
 
     obs[i].front_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs[i].front_depth, 
                                                                                     obs[i].misc['front_camera_extrinsics'],
@@ -83,5 +91,9 @@ def get_stored_demo(data_path, index):
     obs[i].wrist_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs[i].wrist_depth, 
                                                                                            obs[i].misc['wrist_camera_extrinsics'],
                                                                                            obs[i].misc['wrist_camera_intrinsics'])
+    
+    # obs[i].overhead_point_cloud = VisionSensor.pointcloud_from_depth_and_camera_params(obs[i].overhead_depth,
+    #                                                                                         obs[i].misc['overhead_camera_extrinsics'],
+    #                                                                                         obs[i].misc['overhead_camera_intrinsics'])
     
   return obs
