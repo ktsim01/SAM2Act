@@ -38,7 +38,7 @@ from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_bat
 from eval import load_agent
 from sam2act.libs.PyRep.pyrep.objects.vision_sensor import VisionSensor
 import torch.nn.functional as F
-
+from scipy.spatial.transform import Rotation as R
 
 def create_replay(
     batch_size: int,
@@ -389,248 +389,412 @@ def resample_to_fixed(x, rgb, feats, target_points=5500):
     return x[idx], rgb[idx]
 
 # ORIGINAL
-# def _create_articubot_dataset(
-#     task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
-# ):
-#     folder_name = 'episode_' + str(episode_num)
-#     print(episode_num, sample_frame)
+def _create_articubot_dataset(
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
     
     
-#     front_pcd = obs.front_point_cloud.reshape(-1, 3)
-#     wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
-#     left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
-#     right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+    front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
 
-#     front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
-#     wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
-#     left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
-#     right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
 
-#     # all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
-#     # all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+    all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
 
-#     all_pcd = np.concatenate([front_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
-#     all_rgb = np.concatenate([front_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+    # all_pcd = np.concatenate([front_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    # all_rgb = np.concatenate([front_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
 
-#     x_range = (-2.06492364, 2.26651619)
-#     y_range = (-0.96348435, 1.00034714)
-#     z_range = (0.3, 1.72072086)
+    x_range = (-2.06492364, 2.26651619)
+    y_range = (-0.96348435, 1.00034714)
+    z_range = (0.3, 1.72072086)
 
-#     # Table filtered out
-#     # x_range = (-0.5048, 2.26651619)
-#     # y_range = (-0.96348435, 1.00034714)
-#     # z_range = (0.7501, 1.72072086)
+    # Table filtered out
+    # x_range = (-0.5048, 2.26651619)
+    # y_range = (-0.96348435, 1.00034714)
+    # z_range = (0.7501, 1.72072086)
 
-#     mask = (
-#     (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
-#     (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
-#     (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
-#     )
+    mask = (
+    (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
 
-#     breakpoint()
+    # def create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=100):
+    #     # Create linspaces
+    #     x = np.linspace(*x_range, num_points_per_axis)
+    #     y = np.linspace(*y_range, num_points_per_axis)
+    #     z = np.linspace(*z_range, num_points_per_axis)
 
-#     # def create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=100):
-#     #     # Create linspaces
-#     #     x = np.linspace(*x_range, num_points_per_axis)
-#     #     y = np.linspace(*y_range, num_points_per_axis)
-#     #     z = np.linspace(*z_range, num_points_per_axis)
+    #     # Create meshgrids for each plane
 
-#     #     # Create meshgrids for each plane
+    #     # XY Plane (z = z_min)
+    #     xx_xy, yy_xy = np.meshgrid(x, y)
+    #     zz_xy = np.full_like(xx_xy, z_range[0])
+    #     xy_plane = np.stack([xx_xy, yy_xy, zz_xy], axis=-1).reshape(-1, 3)
+    #     xy_color = np.tile(np.array([[1.0, 0.0, 0.0]]), (xy_plane.shape[0], 1))  # Red
 
-#     #     # XY Plane (z = z_min)
-#     #     xx_xy, yy_xy = np.meshgrid(x, y)
-#     #     zz_xy = np.full_like(xx_xy, z_range[0])
-#     #     xy_plane = np.stack([xx_xy, yy_xy, zz_xy], axis=-1).reshape(-1, 3)
-#     #     xy_color = np.tile(np.array([[1.0, 0.0, 0.0]]), (xy_plane.shape[0], 1))  # Red
+    #     # YZ Plane (x = x_min)
+    #     yy_yz, zz_yz = np.meshgrid(y, z)
+    #     xx_yz = np.full_like(yy_yz, x_range[0])
+    #     yz_plane = np.stack([xx_yz, yy_yz, zz_yz], axis=-1).reshape(-1, 3)
+    #     yz_color = np.tile(np.array([[0.0, 1.0, 0.0]]), (yz_plane.shape[0], 1))  # Green
 
-#     #     # YZ Plane (x = x_min)
-#     #     yy_yz, zz_yz = np.meshgrid(y, z)
-#     #     xx_yz = np.full_like(yy_yz, x_range[0])
-#     #     yz_plane = np.stack([xx_yz, yy_yz, zz_yz], axis=-1).reshape(-1, 3)
-#     #     yz_color = np.tile(np.array([[0.0, 1.0, 0.0]]), (yz_plane.shape[0], 1))  # Green
+    #     # ZX Plane (y = y_min)
+    #     zz_zx, xx_zx = np.meshgrid(z, x)
+    #     yy_zx = np.full_like(zz_zx, y_range[0])
+    #     zx_plane = np.stack([xx_zx, yy_zx, zz_zx], axis=-1).reshape(-1, 3)
+    #     zx_color = np.tile(np.array([[0.0, 0.0, 1.0]]), (zx_plane.shape[0], 1))  # Blue
 
-#     #     # ZX Plane (y = y_min)
-#     #     zz_zx, xx_zx = np.meshgrid(z, x)
-#     #     yy_zx = np.full_like(zz_zx, y_range[0])
-#     #     zx_plane = np.stack([xx_zx, yy_zx, zz_zx], axis=-1).reshape(-1, 3)
-#     #     zx_color = np.tile(np.array([[0.0, 0.0, 1.0]]), (zx_plane.shape[0], 1))  # Blue
+    #     # Concatenate all planes and their colors
+    #     all_planes = np.concatenate([xy_plane, yz_plane, zx_plane], axis=0)
+    #     all_colors = np.concatenate([xy_color, yz_color, zx_color], axis=0)
 
-#     #     # Concatenate all planes and their colors
-#     #     all_planes = np.concatenate([xy_plane, yz_plane, zx_plane], axis=0)
-#     #     all_colors = np.concatenate([xy_color, yz_color, zx_color], axis=0)
+    #     return all_planes, all_colors
 
-#     #     return all_planes, all_colors
+    # # Example usage:
+    # # Define bounding ranges based on your pointcloud limits
+    # x_range = ( -2.06492364, 2.26651619)
+    # y_range = (-0.96348435, 1.00034714)
+    # z_range = (0.3, 1.72072086)
 
-#     # # Example usage:
-#     # # Define bounding ranges based on your pointcloud limits
-#     # x_range = ( -2.06492364, 2.26651619)
-#     # y_range = (-0.96348435, 1.00034714)
-#     # z_range = (0.3, 1.72072086)
+    # reference_planes, reference_colors = create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=50)
 
-#     # reference_planes, reference_colors = create_reference_planes_with_colors(x_range, y_range, z_range, num_points_per_axis=50)
+    np_points= all_pcd[mask]
+    np_rgb = all_rgb[mask]
 
-#     np_points= all_pcd[mask]
-#     np_rgb = all_rgb[mask]
-
-#     if False:
-#         if np_points.shape[0] < 6500:
-#             print("Too few points: ", np_points.shape[0])
-#             np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=6500)
+    if False:
+        if np_points.shape[0] < 6500:
+            print("Too few points: ", np_points.shape[0])
+            np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=6500)
             
 
-#         obj_pcd = o3d.geometry.PointCloud()
-#         obj_pcd.points = o3d.utility.Vector3dVector(np_points)
-#         obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+        obj_pcd = o3d.geometry.PointCloud()
+        obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+        obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
 
 
-#         sampled_pcd = obj_pcd.farthest_point_down_sample(6500)
-#         sampled_points = np.asarray(sampled_pcd.points)
-#         sampled_rgb = np.asarray(sampled_pcd.colors)
+        sampled_pcd = obj_pcd.farthest_point_down_sample(6500)
+        sampled_points = np.asarray(sampled_pcd.points)
+        sampled_rgb = np.asarray(sampled_pcd.colors)
 
-#         point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
-
-
-
-#     # np_points = np.concatenate([np_points, reference_planes], axis=0)
-#     # np_rgb = np.concatenate([np_rgb, reference_colors], axis=0)
-
-#     # rand_indx = np.random.choice(all_pcd.shape[0], 30000)
-#     # np_points = all_pcd[rand_indx]
-#     # np_rgb = all_rgb[rand_indx]    
-
-#     obj_pcd = o3d.geometry.PointCloud()
-#     obj_pcd.points = o3d.utility.Vector3dVector(np_points)
-#     obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+        point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
 
 
-#     sampled_pcd = obj_pcd.farthest_point_down_sample(3500)
 
-#     wrist_obj = o3d.geometry.PointCloud()
-#     wrist_obj.points = o3d.utility.Vector3dVector(wrist_pcd)
-#     wrist_obj.colors = o3d.utility.Vector3dVector(wrist_rgb)
+    # np_points = np.concatenate([np_points, reference_planes], axis=0)
+    # np_rgb = np.concatenate([np_rgb, reference_colors], axis=0)
 
-#     # if np_points.shape[0] < 6500:
-#     #     print("Too few points: ", np_points.shape[0])
-#     #     return
-#     wrist_obj = wrist_obj.farthest_point_down_sample(1500)
+    # rand_indx = np.random.choice(all_pcd.shape[0], 30000)
+    # np_points = all_pcd[rand_indx]
+    # np_rgb = all_rgb[rand_indx]    
 
-#     sampled_points = np.concatenate([np.asarray(sampled_pcd.points), np.asarray(wrist_obj.points)], axis=0)
-#     sampled_rgb = np.concatenate([np.asarray(sampled_pcd.colors), np.asarray(wrist_obj.colors)], axis=0)
-#     point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+    obj_pcd = o3d.geometry.PointCloud()
+    obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
 
-#     # point_cloud = np.concatenate([np_points, np_rgb], axis=1)
-#     # point_cloud = resample_to_fixed(point_cloud, target_points=5500)
 
-#     data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
-#             'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
-#             'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
-#             'state': obs.get_low_dim_data(),
-#             'lang_feats': lang_feats,}
+    sampled_pcd = obj_pcd.farthest_point_down_sample(10000)
+    sampled_points = np.asarray(sampled_pcd.points)
+    sampled_rgb = np.asarray(sampled_pcd.colors)
+
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+
+    # point_cloud = np.concatenate([np_points, np_rgb], axis=1)
+    # point_cloud = resample_to_fixed(point_cloud, target_points=5500)
+
+    data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
+            'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+            'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+            'state': obs.get_low_dim_data(),
+            'lang_feats': lang_feats,}
     
-#     if val:
-#         directory = os.path.join('data_articubot', task + '_proper_val', folder_name)
-#     else:
-#         directory = os.path.join('data_articubot', task + '_proper', folder_name)
-#     if not os.path.exists(directory):
-#         os.makedirs(directory)
+    if val:
+        directory = os.path.join('data_articubot', task + 'val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task, folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     
-#     final_path = os.path.join(directory, str(sample_frame) + '.pkl')
-#     with open(final_path, 'wb') as f:
-#         print('Saving data to: ', final_path)
-#         pickle.dump(data, f)
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving data to: ', final_path)
+        pickle.dump(data, f)
+
+#   Orientation discretized 
+def _create_articubot_dataset_orientation_discretized(
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
+    
+    
+    front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+
+    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+
+    all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    # all_pcd = np.concatenate([front_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    # all_rgb = np.concatenate([front_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    x_range = (-2.06492364, 2.26651619)
+    y_range = (-0.96348435, 1.00034714)
+    z_range = (0.3, 1.72072086)
+
+    # Table filtered out
+    # x_range = (-0.5048, 2.26651619)
+    # y_range = (-0.96348435, 1.00034714)
+    # z_range = (0.7501, 1.72072086)
+
+    mask = (
+    (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    np_points= all_pcd[mask]
+    np_rgb = all_rgb[mask]
+
+    obj_pcd = o3d.geometry.PointCloud()
+    obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+
+
+    sampled_pcd = obj_pcd.farthest_point_down_sample(10000)
+    sampled_points = np.asarray(sampled_pcd.points)
+    sampled_rgb = np.asarray(sampled_pcd.colors)
+
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+
+    # point_cloud = np.concatenate([np_points, np_rgb], axis=1)
+    # point_cloud = resample_to_fixed(point_cloud, target_points=5500)
+
+    # data = {'point_cloud': np.expand_dims(point_cloud, axis=0), 
+    #         'action': action, 'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+    #         'goal_gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]), axis=0),
+    #         'state': obs.get_low_dim_data(),
+    #         'lang_feats': lang_feats,}
+
+    gripper_rot = R.from_matrix(obs.gripper_matrix[:3 ,:3]).as_euler("zyx", degrees=True)
+    goal_gripper_rot = R.from_matrix(key_frame_obs.gripper_matrix[:3, :3]).as_euler("zyx", degrees=True)
+
+
+    data = {
+        'point_cloud': np.expand_dims(point_cloud, axis=0),
+        'action': action,
+        'gripper_pos': np.expand_dims(obs.gripper_pose[:3], axis=0),
+        'gripper_rot': np.expand_dims(gripper_rot, axis=0),
+        'goal_gripper_pos': np.expand_dims(key_frame_obs.gripper_pose[:3], axis=0),
+        'goal_gripper_rot': np.expand_dims(goal_gripper_rot, axis=0),
+        'lang_feats': lang_feats,
+    }
+
+    if val:
+        directory = os.path.join('data_articubot', task + 'orientation_discretized_val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task + 'orientation_discretized', folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving data to: ', final_path)
+        pickle.dump(data, f)
+
+def _create_articubot_dataset_zoomed(
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val,
+    zoom_size=0.7, target_points=10000
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
+
+    # Get base point clouds and colors
+    front_pcd = obs.front_point_cloud.reshape(-1, 3)
+    wrist_pcd = obs.wrist_point_cloud.reshape(-1, 3)
+    left_shoulder_pcd = obs.left_shoulder_point_cloud.reshape(-1, 3)
+    right_shoulder_pcd = obs.right_shoulder_point_cloud.reshape(-1, 3)
+
+    front_rgb = obs.front_rgb.reshape(-1, 3) / 255.0
+    wrist_rgb = obs.wrist_rgb.reshape(-1, 3) / 255.0
+    left_shoulder_rgb = obs.left_shoulder_rgb.reshape(-1, 3) / 255.0
+    right_shoulder_rgb = obs.right_shoulder_rgb.reshape(-1, 3) / 255.0
+
+    all_pcd = np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    all_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+
+    # Get goal gripper points
+    goal_gripper_points = get_4_points_from_gripper_pos_orient(
+        key_frame_obs.gripper_pose[:3], 
+        key_frame_obs.gripper_pose[3:7], 
+        key_frame_obs.gripper_joint_positions[1]
+    )
+    goal_center = np.mean(goal_gripper_points, axis=0)
+
+    # Define zoom-in bounding box (cube around goal gripper)
+    x_range = (goal_center[0] - zoom_size/2, goal_center[0] + zoom_size/2)
+    y_range = (goal_center[1] - zoom_size/2, goal_center[1] + zoom_size/2)
+    z_range = (goal_center[2] - zoom_size/2, goal_center[2] + zoom_size/2)
+
+    mask = (
+        (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+        (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+        (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    np_points = all_pcd[mask]
+    np_rgb = all_rgb[mask]
+
+    # Handle too few / too many points
+    if np_points.shape[0] < target_points:
+        print(f"[Zoomed] Too few points: {np_points.shape[0]}")
+        breakpoint()
+        return  # Skip saving this sample if too few points
+
+        print(f"[Zoomed] Too few points: {np_points.shape[0]}, resampling...")
+        # np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=target_points)
+
+
+    obj_pcd = o3d.geometry.PointCloud()
+    obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+    obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+
+    sampled_pcd = obj_pcd.farthest_point_down_sample(target_points)
+    sampled_points = np.asarray(sampled_pcd.points)
+    sampled_rgb = np.asarray(sampled_pcd.colors)
+
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+
+    # Pack data
+    data = {
+        'point_cloud': np.expand_dims(point_cloud, axis=0), 
+        'action': action, 
+        'gripper_pcd': np.expand_dims(get_4_points_from_gripper_pos_orient(
+            obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]), axis=0),
+        'goal_gripper_pcd': np.expand_dims(goal_gripper_points, axis=0),
+        'state': obs.get_low_dim_data(),
+        'lang_feats': lang_feats,
+    }
+    
+    # Save path
+    if val:
+        directory = os.path.join('data_articubot', task + '_zoomed_in_goal_val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task + '_zoomed_in_goal', folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving ZOOMED data to: ', final_path)
+        pickle.dump(data, f)
 
 # MASKED
-# def _create_articubot_dataset(
-#     task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
-# ):
-#     folder_name = 'episode_' + str(episode_num)
-#     print(episode_num, sample_frame)
+def _create_articubot_dataset_object_only(
+    task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
+):
+    folder_name = 'episode_' + str(episode_num)
+    print(episode_num, sample_frame)
 
-#     # --- Helper to filter pcd & rgb with mask ---
-#     def filter_pcd_with_mask(pcd, rgb, mask):
-#         pcd = pcd.reshape(-1, 3)
-#         rgb = rgb.reshape(-1, 3) / 255.0
-#         mask = mask.reshape(-1, 3)
+    # --- Helper to filter pcd & rgb with mask ---
+    def filter_pcd_with_mask(pcd, rgb, mask):
+        pcd = pcd.reshape(-1, 3)
+        rgb = rgb.reshape(-1, 3) / 255.0
+        mask = mask.reshape(-1, 3)
 
-#         # keep = (mask!=10) & (mask!=31) & (mask!=34) & (mask!=35) & (mask!=39) & (mask!=40) & (mask!=41) & (mask!=42) & (mask!=43) & (mask!=44) & (mask!=45) & (mask!=46) & (mask!=48) & (mask!=52) & (mask!=55)
-#         exclude_vals = [10, 31, 34, 35, 39, 40, 41, 42,
-#                         43, 44, 45, 46, 48, 52, 55]
+        # keep = (mask!=10) & (mask!=31) & (mask!=34) & (mask!=35) & (mask!=39) & (mask!=40) & (mask!=41) & (mask!=42) & (mask!=43) & (mask!=44) & (mask!=45) & (mask!=46) & (mask!=48) & (mask!=52) & (mask!=55)
+        exclude_vals = [10, 31, 34, 35, 39, 40, 41, 42,
+                        43, 44, 45, 46, 48, 52, 55]
 
-#         keep = (~np.isin(mask[..., 0], exclude_vals)) | (mask[..., 1] > 0)
-#         return pcd[keep], rgb[keep]
+        keep = (~np.isin(mask[..., 0], exclude_vals)) | (mask[..., 1] > 0)
+        return pcd[keep], rgb[keep]
     
-#     # Filter each view with its corresponding mask
-#     front_pcd, front_rgb = filter_pcd_with_mask(obs.front_point_cloud, obs.front_rgb, obs.front_mask)
-#     wrist_pcd, wrist_rgb = filter_pcd_with_mask(obs.wrist_point_cloud, obs.wrist_rgb, obs.wrist_mask)
-#     left_shoulder_pcd, left_shoulder_rgb = filter_pcd_with_mask(obs.left_shoulder_point_cloud, obs.left_shoulder_rgb, obs.left_shoulder_mask)
-#     right_shoulder_pcd, right_shoulder_rgb = filter_pcd_with_mask(obs.right_shoulder_point_cloud, obs.right_shoulder_rgb, obs.right_shoulder_mask)
+    # Filter each view with its corresponding mask
+    front_pcd, front_rgb = filter_pcd_with_mask(obs.front_point_cloud, obs.front_rgb, obs.front_mask)
+    wrist_pcd, wrist_rgb = filter_pcd_with_mask(obs.wrist_point_cloud, obs.wrist_rgb, obs.wrist_mask)
+    left_shoulder_pcd, left_shoulder_rgb = filter_pcd_with_mask(obs.left_shoulder_point_cloud, obs.left_shoulder_rgb, obs.left_shoulder_mask)
+    right_shoulder_pcd, right_shoulder_rgb = filter_pcd_with_mask(obs.right_shoulder_point_cloud, obs.right_shoulder_rgb, obs.right_shoulder_mask)
 
-#     # Concatenate selected pointclouds
-#     np_points= np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
-#     np_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
+    # Concatenate selected pointclouds
+    np_points= np.concatenate([front_pcd, wrist_pcd, left_shoulder_pcd, right_shoulder_pcd], axis=0)
+    np_rgb = np.concatenate([front_rgb, wrist_rgb, left_shoulder_rgb, right_shoulder_rgb], axis=0)
 
-#     # # Bounding box filter
-#     # x_range = (-2.06492364, 2.26651619)
-#     # y_range = (-0.96348435, 1.00034714)
-#     # z_range = (0.3, 1.72072086)
+    # # Bounding box filter
+    # x_range = (-2.06492364, 2.26651619)
+    # y_range = (-0.96348435, 1.00034714)
+    # z_range = (0.3, 1.72072086)
 
-#     # mask = (
-#     #     (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
-#     #     (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
-#     #     (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
-#     # )
+    # mask = (
+    #     (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+    #     (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+    #     (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    # )
 
-#     # np_points = all_pcd[mask]
-#     # np_rgb = all_rgb[mask]
+    # np_points = all_pcd[mask]
+    # np_rgb = all_rgb[mask]
 
-#     if np_points.shape[0] < 2000:
-#         print("Too few points: ", np_points.shape[0])
-#         np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=2000)
-#         point_cloud = np.concatenate([np_points, np_rgb], axis=1)
+    if np_points.shape[0] < 2000:
+        print("Too few points: ", np_points.shape[0])
+        np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=2000)
+        point_cloud = np.concatenate([np_points, np_rgb], axis=1)
     
-#     else:
-#         # Downsample scene point cloud
-#         obj_pcd = o3d.geometry.PointCloud()
-#         obj_pcd.points = o3d.utility.Vector3dVector(np_points)
-#         obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
+    else:
+        # Downsample scene point cloud
+        obj_pcd = o3d.geometry.PointCloud()
+        obj_pcd.points = o3d.utility.Vector3dVector(np_points)
+        obj_pcd.colors = o3d.utility.Vector3dVector(np_rgb)
 
-#         sampled_pcd = obj_pcd.farthest_point_down_sample(2000)
+        sampled_pcd = obj_pcd.farthest_point_down_sample(2000)
 
-#         # Combine scene + wrist
-#         sampled_points = sampled_pcd.points
-#         sampled_rgb = sampled_pcd.colors
-#         point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+        # Combine scene + wrist
+        sampled_points = sampled_pcd.points
+        sampled_rgb = sampled_pcd.colors
+        point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
 
-#     # Package dataset
-#     data = {
-#         'point_cloud': np.expand_dims(point_cloud, axis=0),
-#         'action': action,
-#         'gripper_pcd': np.expand_dims(
-#             get_4_points_from_gripper_pos_orient(
-#                 obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]
-#             ), axis=0),
-#         'goal_gripper_pcd': np.expand_dims(
-#             get_4_points_from_gripper_pos_orient(
-#                 key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]
-#             ), axis=0),
-#         'state': obs.get_low_dim_data(),
-#         'lang_feats': lang_feats,
-#     }
+    # Package dataset
+    data = {
+        'point_cloud': np.expand_dims(point_cloud, axis=0),
+        'action': action,
+        'gripper_pcd': np.expand_dims(
+            get_4_points_from_gripper_pos_orient(
+                obs.gripper_pose[:3], obs.gripper_pose[3:7], obs.gripper_joint_positions[1]
+            ), axis=0),
+        'goal_gripper_pcd': np.expand_dims(
+            get_4_points_from_gripper_pos_orient(
+                key_frame_obs.gripper_pose[:3], key_frame_obs.gripper_pose[3:7], key_frame_obs.gripper_joint_positions[1]
+            ), axis=0),
+        'state': obs.get_low_dim_data(),
+        'lang_feats': lang_feats,
+    }
 
-#     # Save
-#     if val:
-#         directory = os.path.join('data_articubot', task + '_masked_val', folder_name)
-#     else:
-#         directory = os.path.join('data_articubot', task + '_masked', folder_name)
-#     if not os.path.exists(directory):
-#         os.makedirs(directory)
+    # Save
+    if val:
+        directory = os.path.join('data_articubot', task + '_masked_val', folder_name)
+    else:
+        directory = os.path.join('data_articubot', task + '_masked', folder_name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
-#     final_path = os.path.join(directory, str(sample_frame) + '.pkl')
-#     with open(final_path, 'wb') as f:
-#         print('Saving data to: ', final_path)
-#         pickle.dump(data, f)
+    final_path = os.path.join(directory, str(sample_frame) + '.pkl')
+    with open(final_path, 'wb') as f:
+        print('Saving data to: ', final_path)
+        pickle.dump(data, f)
 
-def _create_articubot_dataset(
+def _create_articubot_dataset_object_sampled_more(
     task, obs, episode_num, sample_frame, key_frame_obs, action, lang_feats, val
 ):
     folder_name = 'episode_' + str(episode_num)
@@ -691,7 +855,7 @@ def _create_articubot_dataset(
         obj_pcd = o3d.geometry.PointCloud()
         obj_pcd.points = o3d.utility.Vector3dVector(obj_points)
         obj_pcd.colors = o3d.utility.Vector3dVector(obj_rgb)
-        obj_pcd = obj_pcd.farthest_point_down_sample(2000)
+        obj_pcd = obj_pcd.farthest_point_down_sample(3000)
         obj_points = np.asarray(obj_pcd.points)
         obj_rgb = np.asarray(obj_pcd.colors)
 
@@ -730,9 +894,9 @@ def _create_articubot_dataset(
 
     # Save
     if val:
-        directory = os.path.join('data_articubot', task + '_10k_masked_no_duplicates_val', folder_name)
+        directory = os.path.join('data_articubot', task + '_10k_object_biased_val', folder_name)
     else:
-        directory = os.path.join('data_articubot', task + '_10k_masked_no_duplicates', folder_name)
+        directory = os.path.join('data_articubot', task + '_10k_object_biased', folder_name)
     if not os.path.exists(directory):
         os.makedirs(directory)
 
@@ -1059,7 +1223,7 @@ def backproject_sam2_features_to_3d(features, depths, intrinsics, extrinsics):
     return points_3d, features_3d
 
 # For rolling out
-def _get_articubot_dataset(obs, add_rgb_zeros=False, add_rgb_ones=False, add_one_hot=False, one_hot_dim=3, collision=False):
+def _get_articubot_dataset(obs, add_rgb_zeros=False, add_rgb_ones=False, add_one_hot=False, one_hot_dim=3, collision=True):
     front_pcd = obs['front_point_cloud'].detach().cpu().numpy()
     front_pcd = front_pcd[0, 0].transpose([1,2,0]).reshape(-1, 3)
     wrist_pcd = obs['wrist_point_cloud'].detach().cpu().numpy()
@@ -1167,6 +1331,7 @@ def _get_articubot_dataset(obs, add_rgb_zeros=False, add_rgb_ones=False, add_one
     
     return obs_dict
 
+# Scene masked out
 def _get_articubot_dataset_masked(
     obs, add_rgb_zeros=False, add_rgb_ones=False, add_one_hot=False, one_hot_dim=3, collision=False, num_points=10000
 ):
@@ -1262,7 +1427,8 @@ def _get_articubot_dataset_masked(
     }
     return obs_dict
 
-def _get_articubot_dataset_10k_masked(
+# Biased sampling of the objects
+def _get_articubot_dataset_10k_object_sampled_more(
     obs, add_rgb_zeros=False, add_rgb_ones=False,
     add_one_hot=False, one_hot_dim=3,
 ):
@@ -1388,6 +1554,94 @@ def _get_featurized_dataset(point_cloud, obs):
     
     return obs_dict
 
+
+def _get_articubot_dataset_zoomed(
+    obs, predicted_goal, zoom_size=0.6, target_points=10000, add_rgb_ones=True, add_rgb_zeros=False, add_one_hot=True, one_hot_dim=3
+):
+
+    def filter_pcd_with_mask(pcd, rgb, mask):
+        pcd = pcd.detach().cpu().numpy()[0, 0].transpose([1, 2, 0]).reshape(-1, 3)
+        rgb = rgb.detach().cpu().numpy()[0, 0].transpose([1, 2, 0]).reshape(-1, 3) / 255.0
+        mask = mask.detach().cpu().numpy()[0, 0].transpose([1, 2, 0]).reshape(-1, 3)
+
+        return pcd, rgb
+
+    # Filter each camera into object and scene
+    scene_pcds, scene_rgbs = [], [], [], []
+    for cam in ["front", "wrist", "left_shoulder", "right_shoulder"]:
+        scene_pcd, scene_rgb = filter_pcd_with_mask(
+            obs[f"{cam}_point_cloud"], obs[f"{cam}_rgb"], obs[f"{cam}_mask"]
+        )
+        scene_pcds.append(scene_pcd); scene_rgbs.append(scene_rgb)
+
+    # Get goal gripper points
+    goal_gripper_points = get_4_points_from_gripper_pos_orient(
+        predicted_goal.gripper_pose[:3], 
+        predicted_goal.gripper_pose[3:7], 
+        predicted_goal.gripper_joint_positions[1]
+    )
+    goal_center = np.mean(goal_gripper_points, axis=0)
+
+    # Define zoom-in bounding box (cube around goal gripper)
+    x_range = (goal_center[0] - zoom_size/2, goal_center[0] + zoom_size/2)
+    y_range = (goal_center[1] - zoom_size/2, goal_center[1] + zoom_size/2)
+    z_range = (goal_center[2] - zoom_size/2, goal_center[2] + zoom_size/2)
+
+    all_pcd = np.concatenate(scene_pcds, axis=0)
+    all_rgb = np.concatenate(scene_rgbs, axis=0)
+
+    mask = (
+        (all_pcd[:, 0] >= x_range[0]) & (all_pcd[:, 0] <= x_range[1]) &
+        (all_pcd[:, 1] >= y_range[0]) & (all_pcd[:, 1] <= y_range[1]) &
+        (all_pcd[:, 2] >= z_range[0]) & (all_pcd[:, 2] <= z_range[1])
+    )
+
+    all_pcd = all_pcd[mask]
+    all_rgb = all_rgb[mask]
+
+    # Handle too few / too many points
+    # if np_points.shape[0] < target_points:
+
+    #     print(f"[Zoomed] Too few points: {np_points.shape[0]}, resampling...")
+    #     # np_points, np_rgb = resample_to_fixed(np_points, np_rgb, target_points=target_points)
+
+    scene_obj = o3d.geometry.PointCloud()
+    scene_obj.points = o3d.utility.Vector3dVector(all_pcd)
+    scene_obj.colors = o3d.utility.Vector3dVector(all_rgb)
+    scene_obj = scene_obj.farthest_point_down_sample(target_points)
+    sampled_points = np.asarray(scene_obj.points)
+    sampled_rgb = np.asarray(scene_obj.colors)
+
+    point_cloud = np.concatenate([sampled_points, sampled_rgb], axis=1)
+
+    gripper_pose = obs['gripper_pose'][0][0].detach().cpu().numpy()
+    joint_pos = obs['gripper_joint_positions'][0][0].detach().cpu().numpy()
+    gripper_pcd = np.expand_dims(
+        get_4_points_from_gripper_pos_orient(gripper_pose[:3], gripper_pose[3:7], joint_pos[1]), axis=0
+    )
+    gripper_pcd = torch.from_numpy(gripper_pcd)
+
+
+    if add_rgb_zeros:
+        gripper_pcd = torch.cat([gripper_pcd, torch.zeros(gripper_pcd.shape)], dim=2)
+    elif add_rgb_ones:
+        gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+
+    if add_one_hot:
+        pointcloud_one_hot = torch.zeros(point_cloud.shape[0], point_cloud.shape[1], one_hot_dim)
+        pointcloud_one_hot[:, :, 0] = 1
+        point_cloud = torch.cat([point_cloud, pointcloud_one_hot], dim=2)
+
+        gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], one_hot_dim)
+        gripper_pcd_one_hot[:, :, 1] = 1
+        gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+
+    point_cloud = point_cloud.unsqueeze(0)
+    gripper_pcd = gripper_pcd.unsqueeze(0)
+
+    return {"point_cloud": point_cloud, "gripper_pcd": gripper_pcd}
+
+    
 def visualize(points):
     point_geometry = o3d.geometry.PointCloud()
     # print(points.shape)
@@ -1777,7 +2031,11 @@ def fill_articubot(
                     _create_featurized_dataset(task, obs, d_idx, i, key_frame_obs, action, agent, obs_dict, lang_feats, val=val)
                 else:
                     _create_articubot_dataset(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
-                
+                    # _create_articubot_dataset_orientation_discretized(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
+
+                    # _create_articubot_dataset_zoomed(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
+                    # _create_articubot_dataset_object_sampled_more(task, obs, d_idx, i, key_frame_obs, action, lang_feats, val=val)
+
                 # timestep += 1
                 # desc = descs[0]
                 # if our starting point is past one of the keypoints, then remove it
