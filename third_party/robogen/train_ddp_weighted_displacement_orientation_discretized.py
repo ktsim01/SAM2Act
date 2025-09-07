@@ -529,6 +529,10 @@ def train(args):
             pitch_bins = angle_to_bin(goal_gripper_rot[..., 1], num_bins=36, range_min=-90, range_max=90)
             yaw_bins   = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180)
 
+            avg_loss = criterion(gripper_pos_prediction, goal_gripper_pos.to(device))
+            loss = loss + avg_loss * args.weight_loss_weight
+            accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
+            
             orient_loss_roll = ce_loss(roll, roll_bins.long().to(device))
             orient_loss_pitch = ce_loss(pitch, pitch_bins.long().to(device))
             orient_loss_yaw = ce_loss(yaw, yaw_bins.long().to(device))
