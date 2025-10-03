@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from pathlib import Path
 from torch.utils.data import DataLoader
-from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text, PointNet2GripperBinary, PointNet2_textV2, PointNet2_text_10k
+from third_party.robogen.test_PointNet2.model_invariant import PointNet2_super, PointNet2_Binary, PointNet2_text, PointNet2GripperBinary, PointNet2_textV2, PointNet2_text_10k, GripperPointClassifier, GripperOrientNet
 from matplotlib import pyplot as plt
 import torch
 from termcolor import cprint
@@ -200,6 +200,32 @@ def get_4_points_from_gripper_pos_orient(gripper_pos, gripper_orn, cur_joint_ang
     gripper_pcd = rotated_pcd + gripper_pos
     return gripper_pcd
 
+def angle_to_bin(angle_deg, num_bins=72, range_min=-180.0, range_max=180.0):
+    """
+    Map an angle in degrees to a bin index [0, num_bins-1].
+    Assumes angle is in [range_min, range_max).
+    Works with scalars or numpy arrays.
+    """
+    # Normalize to [0, 1)
+    normed = (angle_deg - range_min) / (range_max - range_min)
+    bin_idx = (normed * num_bins)
+
+    # Clamp just in case (avoid index num_bins)
+    return np.clip(bin_idx, 0, num_bins - 1)
+
+def get_4_points_from_roll_pitch_yaw(gripper_pos, roll, pitch, yaw):
+    roll = roll * 5 - 180
+    pitch = pitch * 5 - 90
+    yaw = yaw * 5 - 180
+
+    roll, pitch, yaw = np.deg2rad([roll, pitch, yaw])
+
+    # "xyz" means intrinsic rotations about x, y, then z
+    r = R.from_euler('xyz', [roll, pitch, yaw])
+    q = r.as_quat()   # returns [x, y, z, w]
+
+    return get_4_points_from_gripper_pos_orient(gripper_pos, q, cur_joint_angle=0.04)
+
 def rotation_transfer_6D_to_matrix(orient):
     if type(orient) == list or type(orient) == tuple:
         orient = np.array(orient, dtype=np.float64)
@@ -274,7 +300,7 @@ def get_goal_gripper_pos_eefs(actions, eef_pos, eef_quat, eef_qpos, closed_thres
     assert expanded_goal_eef_qpos.shape[0] == len(actions)
     return expanded_goal_eef_pos, expanded_goal_eef_quat, expanded_goal_eef_qpos
 
-def load_high_level_weighted_displacement_policy(task_name, epoch):
+def load_high_level_weighted_displacement_policy(task_name, epoch=300):
     if task_name == 'put_money_in_safe':
         # load_model_path = '/home/ktsim/Projects/tax3d-conditioned-mimicgen/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-15_use_all_data_threading_D2_abs-obj_threading_D2_abs/model_30.pth'
         # load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/pointnet2_super_model_invariant_2025-06-26_use_all_data_put_money_in_safe-obj_use_gripper_open_use_collision_use_color_put_money_in_safe/model_100.pth' # Predictions gripper and collision too
@@ -309,7 +335,18 @@ def load_high_level_weighted_displacement_policy(task_name, epoch):
         # load_model_path = '/home/ktsim/checkpoints/2025-08-24/pointnet2_textV2_model_invariant_2025-08-23_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_additional_film/model_{}.pth'.format(epoch) # with voxels, 5500 points, new architecture 
         # load_model_path = '/home/ktsim/checkpoints/2025-08-23/pointnet2_super_model_invariant_2025-08-23_use_all_data_insert_onto_square_peg-obj_one_hot_use_text_featurized_og_model/model_{}.pth'.format(epoch) # 10k, sam2feats
         # load_model_path =  '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_text_featurized_new_model/model_{}.pth'.format(epoch) # 10k, sam2feats, modified model
-        load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k, modified model, more epochs
+        load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(310) # 10k, modified model, 200-320
+        
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-26_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k, modified model, 320 - 
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_textV2_model_invariant_2025-08-26_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_no_table/model_{}.pth'.format(epoch) # no table, 6500 points
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-31/pointnet2_textV2_model_invariant_2025-08-30_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_masked/model_{}.pth'.format(epoch) #masked
+        # load_model_path = '/home/ktsim/checkpoints/2025-08-31/pointnet2_text_model_invariant_2025-08-30_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_masked/model_{}.pth'.format(epoch) #masked
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-01_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_100.pth'
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-02_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-03_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-07_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_cosine_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-09_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_cosine_/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-09_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_so2_/model_{}.pth'.format(epoch)
     elif task_name == 'place_shape_in_shape_sorter':
         # load_model_path = '/home/ktsim/checkpoints/2025-08-16/pointnet2_super_model_invariant_2025-08-16_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch)
         # load_model_path = '/home/ktsim/checkpoints/2025-08-19/pointnet2_super_model_invariant_2025-08-19_use_all_data_place_shape_in_shape_sorter-obj_one_hot_use_color_use_text_/model_{}.pth'.format(epoch) # 10k
@@ -328,7 +365,58 @@ def load_high_level_weighted_displacement_policy(task_name, epoch):
     # pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=37, use_text_embedding=True).to('cuda')
     pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
     # pointnet2_model = PointNet2_textV2(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+    # pointnet2_model = PointNet2_text(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
 
+
+    pointnet2_model.load_state_dict(torch.load(load_model_path))
+    pointnet2_model.eval()
+    return pointnet2_model
+
+def load_orientation_classifier():
+    load_model_path = '/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps/gripper_pointnet2_binary_model_invariant_2025-09-18_use_all_data_open_drawer-obj_no_weight_use_text_/best_model.pth'
+    cprint(load_model_path, color='white')
+    pointnet2_model = GripperPointClassifier(num_classes=36, input_channel=3).to('cuda')
+    pointnet2_model.load_state_dict(torch.load(load_model_path))
+    pointnet2_model.eval()
+    return pointnet2_model
+
+def load_orientation_discretized():
+    # load_model_path = '/home/ktsim/checkpoints/GripperOrientNet_model_invariant_2025-09-11_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_metric_fixed/model_250.pth'
+    load_model_path = '/home/ktsim/checkpoints/GripperOrientNet_model_invariant_2025-09-29_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_metric_fixed/model_310.pth'
+    cprint(load_model_path, color='blue')
+    pointnet2_model = GripperOrientNet(num_classes=36, input_channel=8, use_text_embedding=True).to('cuda')
+    pointnet2_model.load_state_dict(torch.load(load_model_path))
+    pointnet2_model.eval()
+    return pointnet2_model
+
+
+def load_high_level_zoomed_in_policy(task_name, epoch):
+    if task_name == 'put_money_in_safe':
+        pass
+    elif task_name == 'reach_and_drag':
+        pass
+    elif task_name == 'place_cups':
+        pass
+    elif task_name == 'insert_onto_square_peg':
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-08_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_zoomed_in_goal/model_{}.pth'.format(epoch)
+        # load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-08_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_zoomed_in_goal/model_{}.pth'.format(epoch)
+        load_model_path = '/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-09-12_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_zoomed_wrist_sampled/model_{}.pth'.format(epoch)
+    elif task_name == 'place_shape_in_shape_sorter':
+        pass
+    elif task_name == 'stack_cups':
+        pass
+    elif task_name == 'put_groceries_in_cupboard':
+        pass
+    elif task_name == 'open_drawer':
+        pass
+        cprint(load_model_path, color='blue')
+    # pointnet2_model = PointNet2_super(num_classes=13, input_channel=6, use_in=False).to('cuda')
+    # pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=37, use_text_embedding=True).to('cuda')
+    pointnet2_model = PointNet2_text_10k(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+    # pointnet2_model = PointNet2_textV2(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+    # pointnet2_model = PointNet2_text(num_classes=13, input_channel=8, use_text_embedding=True).to('cuda')
+
+    cprint(load_model_path, color='magenta')
 
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
@@ -405,7 +493,7 @@ def load_high_level_binary_prediction(gripper=False, collision=False, task_name=
     return pointnet2_model
 
 def load_high_level_gmm_policy(epoch=30):
-    load_model_path = f"/data/minon/tax3d-conditioned-mimicgen/models/gmm/square_d2/model_{epoch}.pth"
+    load_model_path = "/home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-10-01_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_gmm_/model_250.pth"
     pointnet2_model = PointNet2_super(num_classes=13, input_channel=3).to('cuda')
     pointnet2_model.load_state_dict(torch.load(load_model_path))
     pointnet2_model.eval()
@@ -459,6 +547,21 @@ def run_high_level_policy_inference(policy, batch, text_embedding=None, return_w
         return outputs, weights
     else:
         return outputs
+def run_gripper_orient_net_inference(policy, batch, text_embedding=None):
+    policy.eval()
+    pointcloud = batch['point_cloud'][:, -1, :, :]
+    gripper_pos = batch['gripper_pos'][:, -1, :, :]
+
+    inputs = torch.cat([pointcloud, gripper_pos], dim=1).float()
+    inputs = inputs.to('cuda')
+    inputs_ = inputs.permute(0, 2, 1)
+    displacement, gripper_pos_prediction, roll, pitch, yaw = policy(inputs_, text_embedding)
+    
+    roll_pred = torch.argmax(roll, dim=1)
+    pitch_pred = torch.argmax(pitch, dim=1)
+    yaw_pred = torch.argmax(yaw, dim=1)
+
+    return gripper_pos_prediction, roll_pred, pitch_pred, yaw_pred
 
 def collision_binary_inference(policy, batch, return_weights=False, text_embedding=None):
     policy.eval()
@@ -529,6 +632,18 @@ def gripper_binary_inference(policy, batch, return_weights=False, text_embedding
     # collision = collision.unsqueeze(1)
 
     # return gripper_open, collision
+
+
+def orientation_inference(policy, batch):
+    policy.eval()
+    goal_gripper_pcd = batch['goal_gripper_pcd'][:, -1, :, :]
+
+    inputs = torch.cat([goal_gripper_pcd], dim=1).float()
+    inputs = inputs.to('cuda')
+    inputs_ = inputs.permute(0, 2, 1)
+    outputs = policy(inputs_)
+    
+    return torch.argmax(outputs, dim=1)
 
 def run_high_level_gmm_inference(policy, batch, text_embedding=None, return_weights=False, one_hot=False):
     pointcloud = batch['point_cloud'][:, -1, :, :]

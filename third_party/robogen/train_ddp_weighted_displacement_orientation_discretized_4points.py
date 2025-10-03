@@ -222,6 +222,7 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_textV2
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k
         from third_party.robogen.test_PointNet2.model_invariant import GripperOrientNet
+        from third_party.robogen.test_PointNet2.model_invariant import GripperOrientNet_4points
 
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
@@ -238,6 +239,8 @@ def train(args):
                 model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'GripperOrientNet':
             model = GripperOrientNet(num_classes=output_dim, input_channel=input_channel, keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+        elif args.model_type == 'GripperOrientNet_4points':
+            model = GripperOrientNet_4points(num_classes=output_dim, input_channel=input_channel, keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
         elif args.model_type == 'pointnet2_binary':
             model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'attn':
@@ -428,7 +431,7 @@ def train(args):
                                       end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
                                       use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
                                       dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False, orientation_prediction=True)
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False, orientation_prediction=True, four_points=True)
     train_dataloader = DataLoader(train_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(train_dataset),
@@ -441,7 +444,7 @@ def train(args):
                                       end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
                                       use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
                                       dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=True, orientation_prediction=True)
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=True, orientation_prediction=True, four_points=True)
     val_dataloader = DataLoader(val_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(val_dataset),
@@ -465,14 +468,13 @@ def train(args):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
             else:
-                pointcloud, gripper_pos, gripper_rot, goal_gripper_pos, goal_gripper_rot, lang_feats = data
+                pointcloud, gripper_pcd, gripper_rot, goal_gripper_pcd, goal_gripper_rot, lang_feats = data
 
             # inputs: B, N, 3
             # gripper_pos: B, 3
             # gripper_rot: B, 3
             # gripper_pcd_history: B, H, 4, 3
             # calculate the displacement from every point to the gripper to get the labels with shape B, N, 4, 3
-            gripper_pos = gripper_pos.unsqueeze(1)
 
             ### SO2 Augmentation
             if args.so2:
@@ -487,7 +489,7 @@ def train(args):
             # gripper_pcd = add_gaussian_noise_torch(gripper_pcd)
 
             if args.use_color:
-                gripper_pos = torch.cat([gripper_pos, torch.ones(gripper_pos.shape)], dim=2)
+                gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
             else:
                 pointcloud = pointcloud[..., :3]
 
@@ -499,10 +501,10 @@ def train(args):
                     pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
                     pointcloud_one_hot[:, :, 0] = 1
                     pointcloud = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                    gripper_pos_one_hot = torch.zeros(gripper_pos.shape[0], gripper_pos.shape[1], 2)
-                    gripper_pos_one_hot[:, :, 1] = 1
-                    gripper_pos = torch.cat([gripper_pos, gripper_pos_one_hot], dim=2)
-                    inputs = torch.cat([pointcloud, gripper_pos], dim=1) # B, N+4, 5
+                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+                    gripper_pcd_one_hot[:, :, 1] = 1
+                    gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+                    inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
 
                 else:
                     inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 3
@@ -513,8 +515,8 @@ def train(args):
             else:
                 inputs = pointcloud
 
-            labels = goal_gripper_pos.unsqueeze(1) - inputs[:, :, :3]
-            B, N, _ = labels.shape
+            labels = goal_gripper_pcd.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+            B, N, _, _ = labels.shape
             labels = labels.view(B, N, -1) # B, N, 12
 
             inputs, labels = inputs.to(device), labels.to(device)
@@ -523,18 +525,18 @@ def train(args):
             # optimizer_orient.zero_grad()
 
             if args.use_text:
-                displacement, gripper_pos_prediction, roll, pitch, yaw= model(xyz=inputs, text_embedding=lang_feats) # B, N, 15
+                displacement, gripper_pcd_prediction, roll, pitch, yaw= model(xyz=inputs, text_embedding=lang_feats) # B, N, 15
             else:
                 outputs = model(inputs)
 
             loss = criterion(displacement, labels)
-            accumulated_displacement_loss += loss.item()
+            accumulated_displacement_loss += args.displacement_loss_weight * loss.item()
 
-            roll_bins  = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180)
+            roll_bins  = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180)
             pitch_bins = angle_to_bin(goal_gripper_rot[..., 1], num_bins=36, range_min=-90, range_max=90)
-            yaw_bins   = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180)
+            yaw_bins   = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180)
 
-            avg_loss = criterion(gripper_pos_prediction, goal_gripper_pos.to(device))
+            avg_loss = criterion(gripper_pcd_prediction, goal_gripper_pcd.to(device))
             loss = loss + avg_loss * args.weight_loss_weight
             accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
             
@@ -595,28 +597,26 @@ def train(args):
 
             model.eval()
             for i, data in enumerate(tqdm(val_dataloader)):
-                pointcloud, gripper_pos, gripper_rot, goal_gripper_pos, goal_gripper_rot, lang_feats = data
+                pointcloud, gripper_pcd, gripper_rot, goal_gripper_pcd, goal_gripper_rot, lang_feats = data
 
                 if not args.use_color:
                     pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
                 
-                gripper_pos = gripper_pos.unsqueeze(1)
-
                 if args.use_color:
-                    gripper_pos = torch.cat([gripper_pos, torch.ones(gripper_pos.shape)], dim=2)
+                    gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
 
                 if args.add_one_hot_encoding:
                     pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
                     pointcloud_one_hot[:, :, 0] = 1
                     pointcloud = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                    gripper_pos_one_hot = torch.zeros(gripper_pos.shape[0], gripper_pos.shape[1], 2)
-                    gripper_pos_one_hot[:, :, 1] = 1
-                    gripper_pos = torch.cat([gripper_pos, gripper_pos_one_hot], dim=2)
+                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+                    gripper_pcd_one_hot[:, :, 1] = 1
+                    gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
 
 
-                inputs = torch.cat([pointcloud, gripper_pos], dim=1) # B, N+4, 5
+                inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
 
-                labels = goal_gripper_pos.unsqueeze(1).unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+                labels = goal_gripper_pcd.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
                 B, N, _, _ = labels.shape
                 labels = labels.view(B, N, -1) # B, N, 12
 
@@ -629,9 +629,9 @@ def train(args):
                 pitch_pred = torch.argmax(pitch, dim=-1)
                 yaw_pred = torch.argmax(yaw, dim=-1)
                 
-                roll_gt = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180).long().to(device)
+                roll_gt = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180).long().to(device)
                 pitch_gt = angle_to_bin(goal_gripper_rot[..., 1], num_bins=36, range_min=-90, range_max=90).long().to(device)
-                yaw_gt = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180).long().to(device)
+                yaw_gt = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180).long().to(device)
 
                 roll_acc += (circular_bin_error(roll_pred, roll_gt, num_bins=72) <= 1).sum().float()
                 pitch_acc += (circular_bin_error(pitch_pred, pitch_gt, num_bins=36) <= 1).sum().float()
@@ -645,7 +645,7 @@ def train(args):
                 print("Pitch prediction and ground truth", pitch_pred, pitch_gt)
                 print("Yaw prediction and ground truth", yaw_pred, yaw_gt)
 
-                accumulated_val_loss += criterion(gripper_pos_prediction, goal_gripper_pos.to(device))
+                accumulated_val_loss += criterion(gripper_pos_prediction, goal_gripper_pcd.to(device))
 
             
             torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
@@ -708,8 +708,9 @@ def parse_args():
     parser.add_argument('--model_type', type=str, default='pointnet2')
     parser.add_argument('--load_model_path', type=str, default=None)
     parser.add_argument('--output_obj_pcd_only', action='store_true')
-    parser.add_argument('--weight_loss_weight', type=float, default=10)
+    parser.add_argument('--weight_loss_weight', type=float, default=15)
     parser.add_argument('--orientation_loss_weight', type=float, default=1)
+    parser.add_argument('--displacement_loss_weight', type=float, default=5)
     parser.add_argument('--use_all_data', action='store_true')
     parser.add_argument('--use_combined_action', action='store_true')
     parser.add_argument('--model_invariant', action='store_true')

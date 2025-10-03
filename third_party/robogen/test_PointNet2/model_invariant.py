@@ -567,6 +567,110 @@ class PointNet2_Binary(nn.Module):
         x = x.permute(0, 2, 1)
         return x # x shape: B, N, num_classes
 
+
+class PointNet2_Discrete(nn.Module):
+    def __init__(self, num_classes, input_channel=3, keep_gripper_in_fps=False, use_in=False, use_text_embedding=False):
+        super(PointNet2_Binary, self).__init__()
+        self.encoded_text_dim = 128  # Output dimension after encoding
+        if use_text_embedding:
+            self.text_encoder = nn.Linear(
+                1024, self.encoded_text_dim
+            )  # SIGLIP input dim
+            self.film_predictor = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),  # [B, 128] -> [B, 256]
+                nn.ReLU(),
+                nn.Linear(256, 1024 * 2),  # [B, 256] -> [B, 2048]
+            )
+            # Init as gamma=0 and beta=1
+            self.film_predictor[-1].weight.data.zero_()
+            self.film_predictor[-1].bias.data.copy_(
+                torch.cat([torch.ones(1024), torch.zeros(1024)])
+            )
+
+        self.sa1 = PointNetSetAbstractionMsg(npoint=1024, radius_list=[0.025, 0.05], nsample_list=[16, 32], in_channel=input_channel - 3, mlp_list=[[16, 16, 32], [32, 32, 64]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa2 = PointNetSetAbstractionMsg(npoint=512, radius_list=[0.05, 0.1], nsample_list=[16, 32], in_channel=96, mlp_list=[[64, 64, 128], [64, 96, 128]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa3 = PointNetSetAbstractionMsg(256, [0.1, 0.2], [16, 32], 128+128, [[128, 196, 256], [128, 196, 256]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa4 = PointNetSetAbstractionMsg(128, [0.2, 0.4], [16, 32], 256+256, [[256, 256, 512], [256, 384, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa5 = PointNetSetAbstractionMsg(64, [0.4, 0.8], [16, 32], 512+512, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.sa6 = PointNetSetAbstractionMsg(16, [0.8, 1.6], [16, 32], 512+512, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps=keep_gripper_in_fps, use_in=use_in)
+        self.fp6 = PointNetFeaturePropagation(512+512+512+512, [512, 512], use_in=use_in)
+        self.fp5 = PointNetFeaturePropagation(512+512+256+256, [512, 512], use_in=use_in)
+        self.fp4 = PointNetFeaturePropagation(1024, [256, 256], use_in=use_in)
+        self.fp3 = PointNetFeaturePropagation(128+128+256, [256, 256], use_in=use_in)
+        self.fp2 = PointNetFeaturePropagation(32+64+256, [256, 128], use_in=use_in)
+        self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128], use_in=use_in)
+        self.conv1 = nn.Conv1d(128, 128, 1)
+        if use_in:
+            self.bn1 = nn.InstanceNorm1d(128)
+        else:
+            self.bn1 = nn.BatchNorm1d(128)
+        # self.drop1 = nn.Dropout(0.5)
+        final_output_dim = 2
+        self.conv2 = nn.Conv1d(128, final_output_dim, 1)
+
+        self.roll = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+
+        self.pitch = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+
+        self.yaw = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+
+
+    def forward(self, xyz, text_embedding):
+        l0_points = xyz
+        l0_xyz = xyz[:, :3, :]
+        
+        if xyz.shape[1] > 3:
+            l1_xyz, l1_points = self.sa1(l0_xyz, xyz[:, 3:, :])
+        else:
+            l1_xyz, l1_points = self.sa1(l0_xyz, None) # (B, 3, 1024) (B, 96, 1024)
+        
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points) # (B, 3, 512) (B, 256, 512)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points) # (B, 3, 256) (B, 512, 256)
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points) # (B, 3, 128) (B, 1024, 128)
+        l5_xyz, l5_points = self.sa5(l4_xyz, l4_points) # (B, 3, 64) (B , 1024, 64)
+        l6_xyz, l6_points = self.sa6(l5_xyz, l5_points) # (B, 3, 16) (B, 1024, 16)
+
+        if text_embedding is not None:
+            encoded_text = self.text_encoder(text_embedding)  # [B, 128]
+            film_params = self.film_predictor(encoded_text)  # [B, 1024 * 2]
+            gamma, beta = film_params.chunk(2, dim=1)  # [B, 1024] each
+            gamma = gamma.unsqueeze(2)  # [B, 1024, 1] for broadcasting
+            beta = beta.unsqueeze(2)  # [B, 1024, 1] for broadcasting
+            l6_points = gamma * l6_points + beta  # FiLM modulation: [B, 1024, 16]
+
+        # Pass it through an mlp here
+        x = torch.max(l6_points, dim=2)[0]  # Global feature vector (B, 1024)
+        
+        roll_pred = self.roll(x)  # (B, 2)
+        pitch_pred = self.pitch(x)
+        yaw_pred = self.yaw(x)
+
+        l5_points = self.fp6(l5_xyz, l6_xyz, l5_points, l6_points) # (B, 512, 64)
+        l4_points = self.fp5(l4_xyz, l5_xyz, l4_points, l5_points) # (B, 512, 128)
+        l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points) # (B, 256, 256)
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points) # (B, 256, 512)
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points) # (B, 128, 1024)
+        l0_points = self.fp1(l0_xyz, l1_xyz, None, l1_points) # (B, 128, num_point)
+
+        x = F.relu(self.bn1(self.conv1(l0_points)))
+        # x = F.relu(self.conv1(l0_points))
+        x = self.conv2(x)
+        # x = F.log_softmax(x, dim=1)
+        x = x.permute(0, 2, 1)
+        return x, roll_pred, pitch_pred, yaw_pred # x shape: B, N, num_classes
+
 class PointNet2GripperBinary(nn.Module):
     def __init__(self, num_classes=2, input_channel=3, use_text_embedding=False):
         super().__init__()
@@ -620,6 +724,30 @@ class PointNet2GripperBinary(nn.Module):
         x = self.mlp(x)  # (B, num_classes)
         return x
 
+class GripperPointClassifier(nn.Module):
+    def __init__(self, num_classes=72, input_dim=3):
+        super().__init__()
+        # Shared MLP
+        self.point_mlp = nn.Sequential(
+            nn.Conv1d(input_dim, 64, 1),
+            nn.ReLU(),
+            nn.Conv1d(64, 128, 1),
+            nn.ReLU()
+        )
+        # Separate heads for roll, pitch, yaw
+        self.fc_roll = nn.Linear(128, num_classes)
+        # self.fc_pitch = nn.Linear(128, num_classes)
+        # self.fc_yaw = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        # x: (B, N, 3)
+        x = self.point_mlp(x)              # (B, 128, N)
+        x = torch.max(x, dim=2)[0]         # (B, 128)
+        # roll_logits = self.fc_roll(x)      # (B, num_classes)
+        # pitch_logits = self.fc_pitch(x)    # (B, num_classes)
+        yaw_logits = self.fc_yaw(x)        # (B, num_classes)
+        # return roll_logits, pitch_logits, yaw_logits
+        return yaw_logits
 
 class PointNet2_superplus(nn.Module):
     def __init__(self, num_classes):
@@ -914,6 +1042,181 @@ class PointNet2_textV2(nn.Module):
         x = x.permute(0, 2, 1)
         return x  # x shape: B, N, num_classes
 
+class PointNet2_text_masked(nn.Module):
+    """
+    Masked-object–tuned PointNet++ with optional FiLM text conditioning.
+
+    Key changes vs your previous version:
+      • SA1/SA2 keep higher npoints (1024→512) for detail retention
+      • SA1/SA2 radii shrunk roughly ×0.5 for smaller object scale
+      • Keep deeper radii moderately large for global context
+      • FiLM kept at mid-level (l3). Bottleneck FiLM is optional via flag.
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        input_channel,
+        keep_gripper_in_fps=False,
+        use_text_embedding=True,
+        use_bottleneck_film=False,  # default off for masked objects
+        encoded_text_dim=128,
+    ):
+        super().__init__()
+        self.use_text_embedding = use_text_embedding
+        self.use_bottleneck_film = use_bottleneck_film
+        self.encoded_text_dim = encoded_text_dim
+
+        # -----------------------------
+        # Text enc + FiLM
+        # -----------------------------
+        if self.use_text_embedding:
+            # Expecting a 1024-d SIGLIP-like embedding; adjust if needed
+            self.text_encoder = nn.Linear(1024, self.encoded_text_dim)
+
+            # FiLM at mid (l3) — modulates 512-ch features
+            self.film_predictor_mid = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),
+                nn.ReLU(inplace=True),
+                nn.Linear(256, 512 * 2),  # gamma|beta for l3 (512 channels)
+            )
+
+            if self.use_bottleneck_film:
+                # FiLM at bottleneck (l6) — modulates 1024-ch features
+                self.film_predictor_bottleneck = nn.Sequential(
+                    nn.Linear(self.encoded_text_dim, 256),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(256, 1024 * 2),
+                )
+
+            # Init FiLM (gamma≈1, beta≈0) for stability
+            for film in [m for m in [getattr(self, 'film_predictor_mid', None), getattr(self, 'film_predictor_bottleneck', None)] if m is not None]:
+                with torch.no_grad():
+                    film[-1].weight.zero_()
+                    out_dim = film[-1].bias.shape[0] // 2
+                    film[-1].bias.copy_(torch.cat([torch.ones(out_dim), torch.zeros(out_dim)]))
+
+        # -----------------------------
+        # Set Abstraction (MSG) — tuned radii + npoints
+        # -----------------------------
+        # SA1: from full masked object cloud (~1.5k–3k) to 1024
+        self.sa1 = PointNetSetAbstractionMsg(
+            npoint=1024,                                 # retain more detail
+            radius_list=[0.01, 0.03],                    # 0.025, 0.05 → smaller neighborhoods
+            nsample_list=[16, 32],
+            in_channel=input_channel - 3,
+            mlp_list=[[16, 16, 32], [32, 32, 64]],       # output: 32+64=96
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # SA2: 1024 → 512
+        self.sa2 = PointNetSetAbstractionMsg(
+            npoint=512,                                  # retain more than masked-tuned 256
+            radius_list=[0.03, 0.07],                    # 0.05, 0.1 → smaller
+            nsample_list=[16, 32],
+            in_channel=96,                               # from SA1
+            mlp_list=[[64, 64, 128], [64, 96, 128]],     # output: 128+128=256
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # SA3: keep similar channels; modestly smaller radii
+        self.sa3 = PointNetSetAbstractionMsg(
+            npoint=256,                                  # keep consistent hierarchy
+            radius_list=[0.07, 0.14],                    # 0.1, 0.2 → modestly smaller
+            nsample_list=[16, 32],
+            in_channel=256,                              # 128 + 128
+            mlp_list=[[128, 196, 256], [128, 196, 256]], # output: 256+256=512
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # SA4: global-ish start; slightly smaller radii than original
+        self.sa4 = PointNetSetAbstractionMsg(
+            npoint=128,                                  # keep same as original
+            radius_list=[0.16, 0.32],                    # 0.2, 0.4 → slightly smaller
+            nsample_list=[16, 32],
+            in_channel=512,                              # 256 + 256
+            mlp_list=[[256, 256, 512], [256, 384, 512]], # output: 512+512=1024
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # SA5: keep as-is (sufficiently global already)
+        self.sa5 = PointNetSetAbstractionMsg(
+            npoint=64,
+            radius_list=[0.32, 0.64],                    # 0.4, 0.8 → slightly smaller
+            nsample_list=[16, 32],
+            in_channel=1024,                             # 512 + 512
+            mlp_list=[[512, 512, 512], [512, 512, 512]], # output: 512+512=1024
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # SA6: final bottleneck
+        self.sa6 = PointNetSetAbstractionMsg(
+            npoint=16,
+            radius_list=[0.64, 1.28],                    # 0.8, 1.6 → slightly smaller
+            nsample_list=[16, 32],
+            in_channel=1024,                             # 512 + 512
+            mlp_list=[[512, 512, 512], [512, 512, 512]], # output: 512+512=1024
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+
+        # -----------------------------
+        # Feature Propagation (channels unchanged)
+        # -----------------------------
+        self.fp6 = PointNetFeaturePropagation(512 + 512 + 512 + 512, [512, 512])
+        self.fp5 = PointNetFeaturePropagation(512 + 512 + 256 + 256, [512, 512])
+        self.fp4 = PointNetFeaturePropagation(1024, [256, 256])
+        self.fp3 = PointNetFeaturePropagation(128 + 128 + 256, [256, 256])
+        self.fp2 = PointNetFeaturePropagation(32 + 64 + 256, [256, 128])
+        self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128])
+
+        self.conv1 = nn.Conv1d(128, 128, 1)
+        self.bn1 = nn.BatchNorm1d(128)
+        self.conv2 = nn.Conv1d(128, num_classes, 1)
+
+    def forward(self, xyz, text_embedding=None):
+        # xyz: [B, C, N]; first 3 are XYZ
+        l0_xyz = xyz[:, :3, :]
+
+        if xyz.shape[1] > 3:
+            l1_xyz, l1_points = self.sa1(l0_xyz, xyz[:, 3:, :])   # Bx3x1024, Bx96x1024
+        else:
+            l1_xyz, l1_points = self.sa1(l0_xyz, None)
+
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)           # Bx3x512, Bx256x512
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)           # Bx3x256, Bx512x256
+
+        # ---- FiLM @ mid (l3) ----
+        if self.use_text_embedding:
+            assert text_embedding is not None, "text_embedding must be provided when use_text_embedding=True"
+            encoded_text = self.text_encoder(text_embedding)      # [B, encoded_text_dim]
+            film_params_mid = self.film_predictor_mid(encoded_text)
+            gamma_mid, beta_mid = film_params_mid.chunk(2, dim=1) # each [B,512]
+            l3_points = gamma_mid.unsqueeze(2) * l3_points + beta_mid.unsqueeze(2)
+
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points)           # Bx3x128,  Bx1024x128
+        l5_xyz, l5_points = self.sa5(l4_xyz, l4_points)           # Bx3x64,  Bx1024x64
+        l6_xyz, l6_points = self.sa6(l5_xyz, l5_points)           # Bx3x16,  Bx1024x16
+
+        # ---- Optional FiLM @ bottleneck (l6) ----
+        if self.use_text_embedding and self.use_bottleneck_film:
+            film_params_bot = self.film_predictor_bottleneck(encoded_text)
+            gamma_bot, beta_bot = film_params_bot.chunk(2, dim=1) # each [B,1024]
+            l6_points = gamma_bot.unsqueeze(2) * l6_points + beta_bot.unsqueeze(2)
+
+        # Feature Propagation back to original resolution
+        l5_points = self.fp6(l5_xyz, l6_xyz, l5_points, l6_points)  # Bx512x64
+        l4_points = self.fp5(l4_xyz, l5_xyz, l4_points, l5_points)  # Bx512x128
+        l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points)  # Bx256x256
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # Bx256x512
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)  # Bx128x1024
+        l0_points = self.fp1(l0_xyz, l1_xyz, None, l1_points)       # Bx128xN
+
+        x = F.relu(self.bn1(self.conv1(l0_points)))
+        x = self.conv2(x)                                           # BxC_outxN
+        x = x.permute(0, 2, 1)                                      # BxN x C_out
+        return x
+
+
 class PointNet2_text_10k(nn.Module):
     def __init__(self, num_classes, input_channel, keep_gripper_in_fps=False, use_text_embedding=False):
         super(PointNet2_text_10k, self).__init__()
@@ -1023,6 +1326,145 @@ class PointNet2_text_10k(nn.Module):
         # x = F.log_softmax(x, dim=1)
         x = x.permute(0, 2, 1)
         return x  # x shape: B, N, num_classes
+    
+
+
+class PointNet2_10k_discretized(nn.Module):
+    def __init__(self, num_classes, input_channel, keep_gripper_in_fps=False, use_text_embedding=False):
+        super().__init__()
+        self.encoded_text_dim = 128  
+        if use_text_embedding:
+            self.text_encoder = nn.Linear(1024, self.encoded_text_dim)  
+            self.film_predictor_mid = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 512 * 2),   # for sa3 features
+            )
+            self.film_predictor_bottleneck = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 1024 * 2),  # for sa6 features
+            )
+            # Init FiLM (gamma ~1, beta ~0)
+            for film in [self.film_predictor_mid, self.film_predictor_bottleneck]:
+                film[-1].weight.data.zero_()
+                out_dim = film[-1].bias.shape[0] // 2
+                film[-1].bias.data.copy_(torch.cat([torch.ones(out_dim), torch.zeros(out_dim)]))
+
+        # Adjusted SA layers
+        self.sa1 = PointNetSetAbstractionMsg(
+            npoint=2048,
+            radius_list=[0.017, 0.033],
+            nsample_list=[16, 32],
+            in_channel=input_channel - 3,
+            mlp_list=[[32, 64], [64, 128]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        self.sa2 = PointNetSetAbstractionMsg(
+            npoint=1024,
+            radius_list=[0.033, 0.067],
+            nsample_list=[16, 32],
+            in_channel=192,
+            mlp_list=[[64, 128], [64, 128]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        self.sa3 = PointNetSetAbstractionMsg(
+            npoint=512,
+            radius_list=[0.067, 0.133],
+            nsample_list=[32, 64],
+            in_channel=128 + 128,
+            mlp_list=[[128, 196, 256], [128, 196, 256]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        # (keep sa4–sa6 as in original, just shrink radii)
+        self.sa4 = PointNetSetAbstractionMsg(
+            256, [0.133, 0.267], [32, 64], 512, [[256, 256, 512], [256, 384, 512]], keep_gripper_in_fps
+        )
+        self.sa5 = PointNetSetAbstractionMsg(
+            128, [0.267, 0.533], [32, 64], 1024, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps
+        )
+        self.sa6 = PointNetSetAbstractionMsg(
+            32, [0.533, 1.067], [32, 64], 1024, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps
+        )
+        self.fp6 = PointNetFeaturePropagation(512 + 512 + 512 + 512, [512, 512])
+        self.fp5 = PointNetFeaturePropagation(512 + 512 + 256 + 256, [512, 512])
+        self.fp4 = PointNetFeaturePropagation(1024, [256, 256])
+        self.fp3 = PointNetFeaturePropagation(128 + 128 + 256, [256, 256])
+        self.fp2 = PointNetFeaturePropagation(64 + 128 + 256, [256, 128])
+        self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128])
+        self.conv1 = nn.Conv1d(128, 128, 1)
+        self.bn1 = nn.BatchNorm1d(128)
+        # self.drop1 = nn.Dropout(0.5)
+        output_dim_num = 4
+        self.conv2 = nn.Conv1d(128, output_dim_num, 1)
+
+
+        self.roll = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+
+        self.pitch = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+
+        self.yaw = nn.Sequential(
+            nn.Linear(1024, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),  # Output: [gripper_state, ignore_collision]
+        )
+        
+    def forward(self, xyz, text_embedding=None):
+        l0_points = xyz
+        l0_xyz = xyz[:, :3, :]
+        # normalize RGB if present
+        if xyz.shape[1] > 3:
+            l1_xyz, l1_points = self.sa1(l0_xyz, xyz[:, 3:, :])
+        else:
+            l1_xyz, l1_points = self.sa1(l0_xyz, None)  # (B, 3, 1024) (B, 96, 1024)
+
+
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
+        # ---- FiLM at mid-level ----
+        encoded_text = self.text_encoder(text_embedding)  # [B,128]
+        film_params_mid = self.film_predictor_mid(encoded_text)  # [B, 512*2]
+        gamma_mid, beta_mid = film_params_mid.chunk(2, dim=1)
+        l3_points = gamma_mid.unsqueeze(2) * l3_points + beta_mid.unsqueeze(2)
+
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points)
+        l5_xyz, l5_points = self.sa5(l4_xyz, l4_points)
+        l6_xyz, l6_points = self.sa6(l5_xyz, l5_points)
+
+        # ---- FiLM at bottleneck ----
+        film_params_bot = self.film_predictor_bottleneck(encoded_text)  # [B,1024*2]
+        gamma_bot, beta_bot = film_params_bot.chunk(2, dim=1)
+        l6_points = gamma_bot.unsqueeze(2) * l6_points + beta_bot.unsqueeze(2)
+
+        # Pass it through an mlp here
+        global_feat = torch.max(l6_points, dim=2)[0]  # Global feature vector (B, 1024)
+        
+        roll_pred = self.roll(global_feat)  # (B, 72)
+        pitch_pred = self.pitch(global_feat)  # (B, 72)
+        yaw_pred = self.yaw(global_feat)
+
+        # (feature propagation same as before)
+        l5_points = self.fp6(l5_xyz, l6_xyz, l5_points, l6_points)  # (B, 512, 64)
+        l4_points = self.fp5(l4_xyz, l5_xyz, l4_points, l5_points)  # (B, 512, 128)
+        l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points)  # (B, 256, 256)
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # (B, 256, 512)
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)  # (B, 128, 1024)
+        l0_points = self.fp1(l0_xyz, l1_xyz, None, l1_points)  # (B, 128, num_point)
+
+        x = F.relu(self.bn1(self.conv1(l0_points)))
+        x = self.conv2(x)
+        # x = F.log_softmax(x, dim=1)
+        x = x.permute(0, 2, 1)
+        return x, roll_pred, pitch_pred, yaw_pred  # x shape: B, N, num_classes
 
 # class OrientationHead(nn.Module):
 #     def __init__(self, in_dim, num_bins):
@@ -1210,7 +1652,176 @@ class GripperOrientNet(nn.Module):
 
         return x[..., :3], pos_prediction, roll, pitch, yaw  # x shape: B, N, num_classes
 
+class GripperOrientNet_4points(nn.Module):
+    def __init__(self, num_classes, input_channel, keep_gripper_in_fps=False, use_text_embedding=False):
+        super().__init__()
+        self.encoded_text_dim = 128  
+        if use_text_embedding:
+            self.text_encoder = nn.Linear(1024, self.encoded_text_dim)  
+            self.film_predictor_mid = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 512 * 2),   # for sa3 features
+            )
+            self.film_predictor_bottleneck = nn.Sequential(
+                nn.Linear(self.encoded_text_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 1024 * 2),  # for sa6 features
+            )
+            # Init FiLM (gamma ~1, beta ~0)
+            for film in [self.film_predictor_mid, self.film_predictor_bottleneck]:
+                film[-1].weight.data.zero_()
+                out_dim = film[-1].bias.shape[0] // 2
+                film[-1].bias.data.copy_(torch.cat([torch.ones(out_dim), torch.zeros(out_dim)]))
 
+        self.in_dim = 76 # 12 + 32 + 32
+        self.num_bins = 72
+
+        self.fc = nn.Sequential(
+            nn.Linear(self.in_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU()
+        )
+        self.roll = nn.Linear(128, self.num_bins)
+        self.pitch = nn.Linear(128, self.num_bins//2)
+        self.yaw = nn.Linear(128, self.num_bins)
+
+        # Adjusted SA layers
+        self.sa1 = PointNetSetAbstractionMsg(
+            npoint=2048,
+            radius_list=[0.017, 0.033],
+            nsample_list=[16, 32],
+            in_channel=input_channel - 3,
+            mlp_list=[[32, 64], [64, 128]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        self.sa2 = PointNetSetAbstractionMsg(
+            npoint=1024,
+            radius_list=[0.033, 0.067],
+            nsample_list=[16, 32],
+            in_channel=192,
+            mlp_list=[[64, 128], [64, 128]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        self.sa3 = PointNetSetAbstractionMsg(
+            npoint=512,
+            radius_list=[0.067, 0.133],
+            nsample_list=[32, 64],
+            in_channel=128 + 128,
+            mlp_list=[[128, 196, 256], [128, 196, 256]],
+            keep_gripper_in_fps=keep_gripper_in_fps,
+        )
+        # (keep sa4–sa6 as in original, just shrink radii)
+        self.sa4 = PointNetSetAbstractionMsg(
+            256, [0.133, 0.267], [32, 64], 512, [[256, 256, 512], [256, 384, 512]], keep_gripper_in_fps
+        )
+        self.sa5 = PointNetSetAbstractionMsg(
+            128, [0.267, 0.533], [32, 64], 1024, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps
+        )
+        self.sa6 = PointNetSetAbstractionMsg(
+            32, [0.533, 1.067], [32, 64], 1024, [[512, 512, 512], [512, 512, 512]], keep_gripper_in_fps
+        )
+        self.fp6 = PointNetFeaturePropagation(512 + 512 + 512 + 512, [512, 512])
+        self.fp5 = PointNetFeaturePropagation(512 + 512 + 256 + 256, [512, 512])
+        self.fp4 = PointNetFeaturePropagation(1024, [256, 256])
+        self.fp3 = PointNetFeaturePropagation(128 + 128 + 256, [256, 256])
+        self.fp2 = PointNetFeaturePropagation(64 + 128 + 256, [256, 128])
+        self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128])
+
+        self.weight_num_classes = 1
+        self.conv1_weight = nn.Conv1d(128, 128, 1)
+        self.bn1_weight = nn.BatchNorm1d(128)
+        self.conv2_weight = nn.Conv1d(128, self.weight_num_classes, 1)
+
+        self.displacement_num_classes = 12
+        self.conv1_displacement = nn.Conv1d(128, 128, 1)
+        self.bn1_displacement = nn.BatchNorm1d(128)
+        self.conv2_displacement = nn.Conv1d(128, self.displacement_num_classes, 1)
+
+        self.orient_features_num_classes = 32
+        self.conv1_orient_features = nn.Conv1d(128, 128, 1)
+        self.bn1_orient_features = nn.BatchNorm1d(128)
+        self.conv2_orient_features = nn.Conv1d(128, self.orient_features_num_classes, 1)
+        
+    def forward(self, xyz=None, text_embedding=None, feats=None,  return_orientation=False):
+
+        if return_orientation:
+            feats = feats.clone().detach()
+            h = self.fc(feats)
+            return self.roll(h), self.pitch(h), self.yaw(h)
+        
+        l0_points = xyz
+        l0_xyz = xyz[:, :3, :]
+        # normalize RGB if present
+        if xyz.shape[1] > 3:
+            l1_xyz, l1_points = self.sa1(l0_xyz, xyz[:, 3:, :])
+        else:
+            l1_xyz, l1_points = self.sa1(l0_xyz, None)  # (B, 3, 1024) (B, 96, 1024)
+
+
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
+        # ---- FiLM at mid-level ----
+        encoded_text = self.text_encoder(text_embedding)  # [B,128]
+        film_params_mid = self.film_predictor_mid(encoded_text)  # [B, 512*2]
+        gamma_mid, beta_mid = film_params_mid.chunk(2, dim=1)
+        l3_points = gamma_mid.unsqueeze(2) * l3_points + beta_mid.unsqueeze(2)
+
+        l4_xyz, l4_points = self.sa4(l3_xyz, l3_points)
+        l5_xyz, l5_points = self.sa5(l4_xyz, l4_points)
+        l6_xyz, l6_points = self.sa6(l5_xyz, l5_points)
+
+        # ---- FiLM at bottleneck ----
+        film_params_bot = self.film_predictor_bottleneck(encoded_text)  # [B,1024*2]
+        gamma_bot, beta_bot = film_params_bot.chunk(2, dim=1)
+        l6_points = gamma_bot.unsqueeze(2) * l6_points + beta_bot.unsqueeze(2)
+
+        # (feature propagation same as before)
+        l5_points = self.fp6(l5_xyz, l6_xyz, l5_points, l6_points)  # (B, 512, 64)
+        l4_points = self.fp5(l4_xyz, l5_xyz, l4_points, l5_points)  # (B, 512, 128)
+        l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points)  # (B, 256, 256)
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # (B, 256, 512)
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)  # (B, 128, 1024)
+        l0_points = self.fp1(l0_xyz, l1_xyz, None, l1_points)  # (B, 128, num_point)
+
+        # # l0_points = l0_points.clone()
+        # x = F.relu(self.bn1(self.conv1(l0_points)))
+        # x = self.conv2(x)
+        # # x = F.log_softmax(x, dim=1)
+        # x = x.permute(0, 2, 1)
+        
+        # three separate conv layers for weight, displacement, orientation features
+        weight = F.relu(self.bn1_weight(self.conv1_weight(l0_points)))
+        weight = self.conv2_weight(weight)
+        weight = weight.permute(0, 2, 1)    
+        weight = F.softmax(weight, dim=1)
+
+        displacement = F.relu(self.bn1_displacement(self.conv1_displacement(l0_points)))
+        displacement = self.conv2_displacement(displacement)
+        displacement = displacement.permute(0, 2, 1)
+
+        per_point_feats = F.relu(self.bn1_orient_features(self.conv1_orient_features(l0_points)))
+        per_point_feats = self.conv2_orient_features(per_point_feats)
+        per_point_feats = per_point_feats.permute(0, 2, 1)
+
+        pcd_prediction = displacement.view(displacement.shape[0], displacement.shape[1], 4, 3) + l0_xyz.permute(0, 2, 1).unsqueeze(2)
+        pcd_prediction = pcd_prediction * weight.unsqueeze(-1)
+        pcd_prediction = pcd_prediction.sum(dim=1)
+
+        max_pooled = torch.max(per_point_feats, dim=1).values
+        weighted_avg = torch.sum(per_point_feats * weight, dim=1)
+        orient_in = torch.cat(
+            [pcd_prediction.view(pcd_prediction.shape[0], -1), max_pooled, weighted_avg], dim=1
+        )
+        h = self.fc(orient_in)
+        roll = self.roll(h)
+        pitch = self.pitch(h)
+        yaw = self.yaw(h)
+
+        return displacement, pcd_prediction, roll, pitch, yaw  # x shape: B, N, num_classes
+    
 if __name__ == '__main__':
 
     from tqdm import tqdm

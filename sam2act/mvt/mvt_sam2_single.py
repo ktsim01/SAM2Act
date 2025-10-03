@@ -653,7 +653,7 @@ class MVT_SAM2_Single(nn.Module):
         lang_emb=None,
         wpt_local=None,
         rot_x_y=None,
-        rollout_articubot=True,
+        articubot=True,
         **kwargs,
     ):
         """
@@ -696,7 +696,7 @@ class MVT_SAM2_Single(nn.Module):
         self.sam2_vision_feats_all, self.sam2_vision_pos_embeds_all = self.sam2_image_encoder_forward(self.sam2, rgb_img)
         sam_out = self.sam2_vision_feats_all[-1].permute(1, 2, 0).view(bs*num_img, -1, *feat_sizes[-1])
 
-        if rollout_articubot:
+        if articubot:
             return self.sam2_vision_feats_all[0].permute(1, 2, 0).reshape(bs*num_img, -1, num_pat_img*4, num_pat_img*4).float()
 
         if num_pat_img == sam_out.shape[-1]:

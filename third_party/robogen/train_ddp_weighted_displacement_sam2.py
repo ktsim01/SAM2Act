@@ -20,6 +20,29 @@ def ddp_setup():
     print("Local rank: ", os.environ["LOCAL_RANK"])
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
+import glob
+import re
+def find_latest_checkpoint(directory):
+    # Pattern: model_<number>.pth
+    checkpoint_files = glob.glob(os.path.join(directory, "model_*.pth"))
+    
+    if not checkpoint_files:
+        return None, 0  # No checkpoints
+
+    # Extract epoch number and pick the highest
+    pattern = re.compile(r"model_(\d+)\.pth$")
+    max_epoch = 0
+    latest_ckpt = None
+    for ckpt in checkpoint_files:
+        match = pattern.search(ckpt)
+        if match:
+            epoch = int(match.group(1))
+            if epoch > max_epoch:
+                max_epoch = epoch
+                latest_ckpt = ckpt
+
+    return latest_ckpt, max_epoch
+
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
@@ -78,13 +101,15 @@ def train(args):
         else:
             raise ValueError(f"model_type {args.model_type} not recognized")
     
+    loaded_epoch = None
     if args.load_model_path is not None:
+        match = re.search(r'model_(\d+)\.pth$', args.load_model_path)
+        if match:
+            loaded_epoch = int(match.group(1))
+            print(f"Loading model from epoch {loaded_epoch}...")
         model.load_state_dict(torch.load(args.load_model_path, map_location=device))
         print("Successfully load model from: ", args.load_model_path)
     
-    model.train()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.MSELoss()
     bce_loss = torch.nn.BCEWithLogitsLoss()
 
@@ -142,6 +167,17 @@ def train(args):
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
+    latest_ckpt, latest_epoch = find_latest_checkpoint(args.exp_path)
+        
+    if latest_ckpt is not None:
+        print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
+        model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+        print("Successfully loaded model from: ", latest_ckpt)
+    elif loaded_epoch is not None:
+        latest_epoch = loaded_epoch
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    model.train()
 
     gpu_id = int(os.environ["LOCAL_RANK"])
     model = DDP(model, device_ids=[gpu_id])
@@ -227,6 +263,10 @@ def train(args):
     min_val_loss = float('inf')
 
     for epoch in range(args.num_epochs):
+        if epoch < latest_epoch:
+            print(f"Skipping epoch {epoch + 1} as it is less than the latest epoch {latest_epoch}")
+            continue
+
         running_loss = 0.0
         accumulated_displacement_loss = 0.0
         accumulated_weighting_loss = 0.0
