@@ -1,4 +1,5 @@
 import torch
+torch.autograd.set_detect_anomaly(True)
 from tqdm import tqdm
 import argparse
 from torch.utils.data.distributed import DistributedSampler
@@ -25,6 +26,23 @@ def add_gaussian_noise_torch(points, noise_magnitude=0.01):
     device = points.device
     noise = torch.randn_like(points) * noise_magnitude
     return points + noise
+
+def angle_to_bin(angle_deg, num_bins=72, range_min=-180.0, range_max=180.0):
+    """
+    Map an angle in degrees to a bin index [0, num_bins-1].
+    Assumes angle is in [range_min, range_max).
+    Works with scalars or numpy arrays.
+    """
+    # Normalize to [0, 1)
+    normed = (angle_deg - range_min) / (range_max - range_min)
+    bin_idx = (normed * num_bins).long()
+
+    # Clamp just in case (avoid index num_bins)
+    return np.clip(bin_idx, 0, num_bins - 1)
+
+def circular_bin_error(pred_idx, gt_idx, num_bins=72):
+    diff = torch.abs(pred_idx - gt_idx)
+    return torch.min(diff, num_bins - diff)
 
 
 def apply_random_se3(pcd, max_translation=0.01, max_rotation_deg=10):
@@ -183,6 +201,7 @@ def find_latest_checkpoint(directory):
 
     return latest_ckpt, max_epoch
 
+
 import subprocess
 
 def upload_file(local_folder):
@@ -288,6 +307,7 @@ def download_gcs_blob(gcs_path):
     blob.download_to_filename(temp_path)
     return temp_path
 
+
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
@@ -297,9 +317,7 @@ def train(args):
     if args.add_one_hot_encoding:
         input_channel += 2
 
-    if args.use_gripper_open and args.use_collision: 
-        output_dim = 3 # weights, gripper, and collision
-    else: output_dim = 13 # 4 gripper points, 3 coordinates each, and weights
+    output_dim = 36 # 3 + 1 + 32: position, weight, features
 
     if args.model_invariant:
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_small2
@@ -310,7 +328,8 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_textV2
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k
-
+        from third_party.robogen.test_PointNet2.model_invariant import GripperOrientNet
+        from third_party.robogen.test_PointNet2.model_invariant import GripperOrientNet_4points
 
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
@@ -322,10 +341,13 @@ def train(args):
             model = PointNet2_textV2(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
         elif args.model_type == 'pointnet2_text_10k':
             if args.use_text:
-                model = PointNet2_text_10k(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+                model = PointNet2_text_10k(num_classes=output_dim, input_channel=input_channel, use_text_embedding=True).to(device)
             else:
                 model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
-
+        elif args.model_type == 'GripperOrientNet':
+            model = GripperOrientNet(num_classes=output_dim, input_channel=input_channel, keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+        elif args.model_type == 'GripperOrientNet_4points':
+            model = GripperOrientNet_4points(num_classes=output_dim, input_channel=input_channel, keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
         elif args.model_type == 'pointnet2_binary':
             model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'attn':
@@ -352,8 +374,9 @@ def train(args):
     loaded_epoch = None
     if args.load_model_path is not None:
         model, epoch = load_checkpoint(model, device, args.load_model_path)
-
+    
     criterion = torch.nn.MSELoss()
+    ce_loss = torch.nn.CrossEntropyLoss()
     # dataloader = get_dataloader(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
     # dataloader = get_dataloader_from_pickle(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
     
@@ -423,6 +446,33 @@ def train(args):
     elif loaded_epoch is not None:
         latest_epoch = loaded_epoch
 
+    # optimizer_seg = torch.optim.Adam(
+    #     list(model.sa1.parameters()) +
+    #     list(model.sa2.parameters()) +
+    #     list(model.sa3.parameters()) +
+    #     list(model.sa4.parameters()) +
+    #     list(model.sa5.parameters()) +
+    #     list(model.sa6.parameters()) +
+    #     list(model.fp1.parameters()) +
+    #     list(model.fp2.parameters()) +
+    #     list(model.fp3.parameters()) +
+    #     list(model.fp4.parameters()) +
+    #     list(model.fp5.parameters()) +
+    #     list(model.fp6.parameters()) +
+    #     list(model.conv1.parameters()) +
+    #     list(model.bn1.parameters()) +
+    #     list(model.conv2.parameters()),
+    #     lr=args.lr
+    # )
+
+    # # Orientation optimizer (independent head)
+    # optimizer_orient = torch.optim.Adam(
+    #     list(model.fc.parameters()) +
+    #     list(model.roll.parameters()) +
+    #     list(model.pitch.parameters()) +
+    #     list(model.yaw.parameters()),
+    #     lr=getattr(args, "lr_orient", args.lr)  # fallback to seg lr if not specified
+    # )
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     model.train()
 
@@ -445,7 +495,6 @@ def train(args):
                     "model_type": args.model_type,
                     "lr": args.lr,
                     "weight_loss_weight": args.weight_loss_weight,
-                    "gripper_collision_loss_weight": args.gripper_collision_loss_weight,
                     "batch_size": args.batch_size
                 }
             )
@@ -484,7 +533,7 @@ def train(args):
                                       end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
                                       use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
                                       dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False)
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False, orientation_prediction=True, four_points=True)
     train_dataloader = DataLoader(train_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(train_dataset),
@@ -497,7 +546,7 @@ def train(args):
                                       end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
                                       use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
                                       dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=True)
+                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=True, orientation_prediction=True, four_points=True)
     val_dataloader = DataLoader(val_dataset, 
                 shuffle=False,
                 sampler=DistributedSampler(val_dataset),
@@ -521,14 +570,13 @@ def train(args):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
             else:
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
+                pointcloud, gripper_pcd, gripper_rot, goal_gripper_pcd, goal_gripper_rot, lang_feats = data
 
             # inputs: B, N, 3
-            # gripper_pcd: B, 4, 3
-            # goal_gripper_points: B, 4, 3
+            # gripper_pos: B, 3
+            # gripper_rot: B, 3
             # gripper_pcd_history: B, H, 4, 3
             # calculate the displacement from every point to the gripper to get the labels with shape B, N, 4, 3
-            
 
             ### SO2 Augmentation
             if args.so2:
@@ -547,7 +595,6 @@ def train(args):
             else:
                 pointcloud = pointcloud[..., :3]
 
-            gripper_points = goal_gripper_pcd
 
             if not args.predict_two_goals:
                 if args.add_one_hot_encoding:
@@ -560,6 +607,7 @@ def train(args):
                     gripper_pcd_one_hot[:, :, 1] = 1
                     gripper_pcd = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
                     inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
+
                 else:
                     inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 3
                     if args.n_obs_steps > 1:
@@ -569,93 +617,56 @@ def train(args):
             else:
                 inputs = pointcloud
 
-            labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+            labels = goal_gripper_pcd.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
             B, N, _, _ = labels.shape
             labels = labels.view(B, N, -1) # B, N, 12
 
             inputs, labels = inputs.to(device), labels.to(device)
             inputs = inputs.permute(0, 2, 1)
             optimizer.zero_grad()
+            # optimizer_orient.zero_grad()
 
             if args.use_text:
-                outputs = model(inputs, lang_feats) # B, N, 15
+                displacement, gripper_pcd_prediction, roll, pitch, yaw= model(xyz=inputs, text_embedding=lang_feats) # B, N, 15
             else:
                 outputs = model(inputs)
 
-            weights = outputs[:, :, -1] # B, N
-            outputs = outputs[:, :, :-1] # B, N, 12
+            loss = criterion(displacement, labels)
+            accumulated_displacement_loss += args.displacement_loss_weight * loss.item()
 
-            if args.output_obj_pcd_only:
-                weights = weights[:, :-4]
-                outputs = outputs[:, :-4, :]
-                labels = labels[:, :-4, :]
-                inputs = inputs[:, :, :-4]
-                N = N - 4
+            roll_bins  = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180)
+            pitch_bins = angle_to_bin(goal_gripper_rot[..., 1], num_bins=36, range_min=-90, range_max=90)
+            yaw_bins   = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180)
 
-            if args.gmm:
-                diff = outputs - labels  # Shape: (B, N, 12)
-                fixed_variance = args.fixed_variance
-                exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
-                log_gaussians = exponent 
-
-                # Compute log mixing coefficients
-                log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
-                log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-10)  # Prevent extreme values
-
-                max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
-                log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
-                
-                loss = -torch.mean(log_probs) # mean of the negative log likelihood
-                accumulated_displacement_loss += loss.item()
+            avg_loss = criterion(gripper_pcd_prediction, goal_gripper_pcd.to(device))
+            loss = loss + avg_loss * args.weight_loss_weight
+            accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
             
-            else:
-                loss = criterion(outputs, labels)
-                accumulated_displacement_loss += loss.item()
+            orient_loss_roll = ce_loss(roll, roll_bins.long().to(device))
+            orient_loss_pitch = ce_loss(pitch, pitch_bins.long().to(device))
+            orient_loss_yaw = ce_loss(yaw, yaw_bins.long().to(device))
+            orient_loss = (orient_loss_roll + orient_loss_pitch + orient_loss_yaw) / 3
 
-                if args.using_weight:
-                    inputs = inputs.permute(0, 2, 1)
-                    if not args.predict_two_goals:
-                        outputs = outputs.view(B, N, 4, 3)
-                    else:
-                        outputs = outputs.view(B, N, 8, 3)
-                    outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
-
-                    # softmax the weights
-                    weights = torch.nn.functional.softmax(weights, dim=1)
-                    
-                    # sum the displacement of the predicted gripper point cloud according to the weights
-                    outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                    outputs = outputs.sum(dim=1)
-                    avg_loss = criterion(outputs, gripper_points.to(device))
-
-                    loss = loss + avg_loss * args.weight_loss_weight
-                    accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
+            loss =  loss + orient_loss * args.orientation_loss_weight
 
             loss.backward()
             optimizer.step()
+
             running_loss += loss.item()
 
-            # if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
-            #     print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
-                
-            #     log_info = {
-            #         "epoch": epoch + 1,
-            #         "global_step": global_step,
-            #         "total_loss": running_loss / 1000,
-            #         "displacement_loss": accumulated_displacement_loss / 1000,
-            #         "weighting_loss": accumulated_weighting_loss / 1000,
-
-            #     }
-            log_interval = len(train_dataloader) // 6
-            if (i+1) % log_interval == 0 and os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / log_interval}")
+            if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
+                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
                 
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "total_loss": running_loss / log_interval,
-                    "displacement_loss": accumulated_displacement_loss / log_interval,
-                    "weighting_loss": accumulated_weighting_loss / log_interval,
+                    "total_loss": running_loss / 1000,
+                    "displacement_loss": accumulated_displacement_loss / 1000,
+                    "weighting_loss": accumulated_weighting_loss / 1000,
+                    "orient_loss_roll": orient_loss_roll.item() / 1000,
+                    "orient_loss_pitch": orient_loss_pitch.item() / 1000,
+                    "orient_loss_yaw": orient_loss_yaw.item() / 1000,
+
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)
@@ -663,16 +674,32 @@ def train(args):
                 running_loss = 0.0
                 accumulated_displacement_loss = 0.0
                 accumulated_weighting_loss = 0.0
+                orient_loss = 0.0
 
+
+            # log_interval = len(train_dataloader) // 6
+            # if (i+1) % log_interval == 0 and os.environ['LOCAL_RANK'] == '0':
+            #     print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / log_interval}")
+                
+            #     log_info = {
+            #         "epoch": epoch + 1,
+            #         "global_step": global_step,
+            #         "total_loss": running_loss / log_interval,
+            #         "displacement_loss": accumulated_displacement_loss / log_interval,
+            #         "weighting_loss": accumulated_weighting_loss / log_interval,
+            #     }
             global_step += 1
 
         
         if (epoch + 1) % 5 == 0:
             accumulated_val_loss = 0.0
+            roll_acc = 0.0
+            pitch_acc = 0.0
+            yaw_acc = 0.0
+
             model.eval()
             for i, data in enumerate(tqdm(val_dataloader)):
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
-                gripper_points = goal_gripper_pcd
+                pointcloud, gripper_pcd, gripper_rot, goal_gripper_pcd, goal_gripper_rot, lang_feats = data
 
                 if not args.use_color:
                     pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
@@ -691,53 +718,58 @@ def train(args):
 
                 inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 5
 
-                labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+                labels = goal_gripper_pcd.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
                 B, N, _, _ = labels.shape
                 labels = labels.view(B, N, -1) # B, N, 12
 
                 inputs, labels = inputs.to(device), labels.to(device)
                 inputs = inputs.permute(0, 2, 1)
                 with torch.no_grad():
-                    outputs = model(inputs, lang_feats) # B, N, 13
+                    displacement, gripper_pos_prediction, roll, pitch, yaw = model(inputs, lang_feats) # B, N, 13
+                
+                roll_pred = torch.argmax(roll, dim=-1)
+                pitch_pred = torch.argmax(pitch, dim=-1)
+                yaw_pred = torch.argmax(yaw, dim=-1)
+                
+                roll_gt = angle_to_bin(goal_gripper_rot[..., 0], num_bins=72, range_min=-180, range_max=180).long().to(device)
+                pitch_gt = angle_to_bin(goal_gripper_rot[..., 1], num_bins=36, range_min=-90, range_max=90).long().to(device)
+                yaw_gt = angle_to_bin(goal_gripper_rot[..., 2], num_bins=72, range_min=-180, range_max=180).long().to(device)
 
-                weights = outputs[:, :, -1] # B, N
-                outputs = outputs[:, :, :-1] # B, N, 12
+                roll_acc += (circular_bin_error(roll_pred, roll_gt, num_bins=72) <= 1).sum().float()
+                pitch_acc += (circular_bin_error(pitch_pred, pitch_gt, num_bins=36) <= 1).sum().float()
+                yaw_acc += (circular_bin_error(yaw_pred, yaw_gt, num_bins=72) <= 1).sum().float()
 
-                if args.using_weight:
-                    inputs = inputs.permute(0, 2, 1)
-                    if not args.predict_two_goals:
-                        outputs = outputs.view(B, N, 4, 3)
-                    else:
-                        outputs = outputs.view(B, N, 8, 3)
+                # roll_acc += (roll_pred == roll_gt).sum().float()
+                # pitch_acc += (pitch_pred == pitch_gt).sum().float()
+                # yaw_acc += (yaw_pred == yaw_gt).sum().float()
 
-                    # softmax the weights
-                    weights = torch.nn.functional.softmax(weights, dim=1)
+                print("Roll prediction and ground truth", roll_pred, roll_gt)
+                print("Pitch prediction and ground truth", pitch_pred, pitch_gt)
+                print("Yaw prediction and ground truth", yaw_pred, yaw_gt)
 
-                    if args.gmm:
-                        sampled_index = torch.argmax(weights, dim=1) # B, 1
-                        batch_indices = torch.arange(B, device=device) # B,
-                        displacement_mean = outputs[batch_indices, sampled_index, :, :] # B, 4, 3
-                        input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
-                        prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
-                        accumulated_val_loss += criterion(prediction, gripper_points.to(device))
-                    else:
-                        outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
+                accumulated_val_loss += criterion(gripper_pos_prediction, goal_gripper_pcd.to(device))
 
-                        # sum the displacement of the predicted gripper point cloud according to the weights
-                        outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                        outputs = outputs.sum(dim=1)
-                        accumulated_val_loss += criterion(outputs, gripper_points.to(device))
             
             torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(roll_acc, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(pitch_acc, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(yaw_acc, op=torch.distributed.ReduceOp.SUM)
+
             accumulated_val_loss = accumulated_val_loss.item()
+            roll_acc = roll_acc.item()
+            pitch_acc = pitch_acc.item()
+            yaw_acc = yaw_acc.item()
 
             if os.environ['LOCAL_RANK'] == '0':
                 print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / len(val_dataloader.dataset)}")
-
+                print(f"Roll acc: {roll_acc / len(val_dataloader.dataset)}, Pitch acc: {pitch_acc / len(val_dataloader.dataset)}, Yaw acc: {yaw_acc / len(val_dataloader.dataset)}")
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
                     "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
+                    "roll_acc": roll_acc / len(val_dataloader.dataset),
+                    "pitch_acc": pitch_acc / len(val_dataloader.dataset),
+                    "yaw_acc": yaw_acc / len(val_dataloader.dataset),
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)
@@ -749,6 +781,9 @@ def train(args):
                         torch.save(model.module.state_dict(), save_path)
                         print(f"Saved best model to {save_path}")
                 accumulated_val_loss = 0.0
+                roll_acc = 0.0
+                pitch_acc = 0.0
+                yaw_acc = 0.0
             
             model.train()
 
@@ -776,8 +811,9 @@ def parse_args():
     parser.add_argument('--model_type', type=str, default='pointnet2')
     parser.add_argument('--load_model_path', type=str, default=None)
     parser.add_argument('--output_obj_pcd_only', action='store_true')
-    parser.add_argument('--weight_loss_weight', type=float, default=10)
-    parser.add_argument('--gripper_collision_loss_weight', type=float, default=1)
+    parser.add_argument('--weight_loss_weight', type=float, default=15)
+    parser.add_argument('--orientation_loss_weight', type=float, default=1)
+    parser.add_argument('--displacement_loss_weight', type=float, default=5)
     parser.add_argument('--use_all_data', action='store_true')
     parser.add_argument('--use_combined_action', action='store_true')
     parser.add_argument('--model_invariant', action='store_true')
