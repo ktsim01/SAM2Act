@@ -234,18 +234,9 @@ def load_checkpoint(model, device, load_model_path):
 
     # If the path points to GCS
     if load_model_path.startswith("gs://"):
-        # Option 1: if load_model_path is a directory, find latest checkpoint
-        if load_model_path.endswith("/"):
-            bucket_name, prefix = parse_gcs_path(load_model_path)
-            latest_ckpt, loaded_epoch = find_latest_checkpoint_gcs(bucket_name, prefix)
-            if latest_ckpt is None:
-                print("No checkpoint found in GCS.")
-                return model, 0
-        else:
-            # Option 2: specific GCS file path
-            match = re.search(r"model_(\d+)\.pth$", load_model_path)
-            loaded_epoch = int(match.group(1)) if match else 0
-            latest_ckpt = load_model_path
+        match = re.search(r"model_(\d+)\.pth$", load_model_path)
+        loaded_epoch = int(match.group(1)) if match else 0
+        latest_ckpt = load_model_path
 
         print(f"Downloading model from GCS: {latest_ckpt}")
         temp_path = download_gcs_blob(latest_ckpt)
@@ -441,7 +432,8 @@ def train(args):
         
     if latest_ckpt is not None:
         print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
-        model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+        temp_path = download_gcs_blob(latest_ckpt)
+        model.load_state_dict(torch.load(temp_path, map_location=device))
         print("Successfully loaded model from: ", latest_ckpt)
     elif loaded_epoch is not None:
         latest_epoch = loaded_epoch
