@@ -11,8 +11,12 @@ from third_party.robogen.test_PointNet2.dataset_from_disk import get_dataset_fro
 import wandb
 from termcolor import cprint
 import numpy as np
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 import sys
+import torch.nn.functional as F
+from third_party.robogen.robogen_utils import rotation_transfer_matrix_to_6D_batch, rotation_transfer_matrix_to_6D, \
+                          get_4_points_from_gripper_pos_orient, get_gripper_pos_orient_from_4_points
 sys.path.append('..')
 
 def ddp_setup():
@@ -160,6 +164,35 @@ def apply_random_so2_z(pcd, gripper_pcd, goal_gripper_pcd, max_translation=0.01,
 
     return translated, translated_gripper, translated_goal_gripper
 
+def cosine_loss(pred: torch.Tensor, gt: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Compute cosine similarity loss between predicted and ground truth vectors.
+
+    Args:
+        pred: (B, D) predicted vectors
+        gt: (B, D) ground truth vectors
+        eps: small value for numerical stability
+
+    Returns:
+        Scalar tensor: mean(1 - cos_sim)
+    """
+    # Mean-center
+    pred = pred - pred.mean(dim=1, keepdim=True)
+    gt   = gt - gt.mean(dim=1, keepdim=True)
+
+    # Dot product
+    dot = (pred * gt).sum(dim=-1)  # (B,)
+
+    # Norms with clamp
+    norm_pred = pred.norm(dim=-1).clamp(min=eps)
+    norm_gt   = gt.norm(dim=-1).clamp(min=eps)
+
+    # Cosine similarity
+    cos_sim = dot / (norm_pred * norm_gt)
+    cos_sim = torch.clamp(cos_sim, -1.0, 1.0)
+
+    # Loss
+    return (1 - cos_sim).mean()
 import glob
 import re
 def find_latest_checkpoint(directory):
@@ -309,14 +342,18 @@ def train(args):
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_Binary
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_textV2
+        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_masked
         from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k
+        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k_big
+        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k_another_film
+        from third_party.robogen.test_PointNet2.model_invariant import PointNet2_text_10k_increased_nsample
 
 
         if args.model_type == 'pointnet2':
             model = PointNet2_small2(num_classes=output_dim).to(device)
         elif args.model_type == 'pointnet2_large':
             model = PointNet2(num_classes=output_dim).to(device)
-        elif args.model_type == 'pointnet2_super':
+        elif args.model_type == 'pointnet2_text':
             model = PointNet2_text(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
         elif args.model_type == 'pointnet2_textV2':
             model = PointNet2_textV2(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
@@ -325,7 +362,14 @@ def train(args):
                 model = PointNet2_text_10k(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
             else:
                 model = PointNet2_super(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
-
+        elif args.model_type == 'pointnet2_text_10k_increased_nsample':
+            model = PointNet2_text_10k_increased_nsample(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+        elif args.model_type == 'pointnet2_text_10k_another_film':
+            model = PointNet2_text_10k_another_film(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+        elif args.model_type == 'pointnet2_text_10k_big':
+            model = PointNet2_text_10k_big(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
+        elif args.model_type == 'pointnet2_text_masked':
+            model = PointNet2_text_masked(num_classes=output_dim, input_channel=input_channel,  keep_gripper_in_fps=args.keep_gripper_in_fps, use_text_embedding=True).to(device)
         elif args.model_type == 'pointnet2_binary':
             model = PointNet2_Binary(num_classes=output_dim, keep_gripper_in_fps=args.keep_gripper_in_fps, input_channel=input_channel, use_in=args.use_instance_norm).to(device)
         elif args.model_type == 'attn':
@@ -351,7 +395,7 @@ def train(args):
     
     loaded_epoch = None
     if args.load_model_path is not None:
-        model, epoch = load_checkpoint(model, device, args.load_model_path)
+        model, loaded_epoch = load_checkpoint(model, device, args.load_model_path)
 
     criterion = torch.nn.MSELoss()
     # dataloader = get_dataloader(all_obj_paths=args.all_zarr_path, batch_size=args.batch_size, beg_ratio=args.beg_ratio, end_ratio=args.end_ratio, shuffle=True, only_first_stage=args.only_first_stage)
@@ -407,6 +451,15 @@ def train(args):
     if args.gmm:
         output_dir = output_dir + "_gmm"
     
+    if args.cosine_similarity:
+        output_dir = output_dir + "_cosine"
+
+    if args.cosine_annealing:
+        output_dir = output_dir + "_cosine_annealing"
+    
+    if args.rotation_loss:
+        output_dir = output_dir + "_rotation_loss"
+
     if args.so2:
         output_dir = output_dir + "_so2"
 
@@ -424,6 +477,10 @@ def train(args):
         latest_epoch = loaded_epoch
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    if args.cosine_annealing:
+        scheduler = CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
+
     model.train()
 
     gpu_id = int(os.environ["LOCAL_RANK"])
@@ -517,6 +574,8 @@ def train(args):
         running_loss = 0.0
         accumulated_displacement_loss = 0.0
         accumulated_weighting_loss = 0.0
+        accumulated_cos_loss = 0.0
+        rotation_loss = 0.0
         for i, data in enumerate(tqdm(train_dataloader)):
             if args.n_obs_steps > 1:
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
@@ -610,6 +669,7 @@ def train(args):
             
             else:
                 loss = criterion(outputs, labels)
+                rot_loss = 0.0
                 accumulated_displacement_loss += loss.item()
 
                 if args.using_weight:
@@ -628,34 +688,73 @@ def train(args):
                     outputs = outputs.sum(dim=1)
                     avg_loss = criterion(outputs, gripper_points.to(device))
 
+                    if args.cosine_similarity:
+                        gripper_points = gripper_points.to(device)
+                        # Jaw vectors
+                        jaw_pred = outputs[:, 1, :] - outputs[:, 2, :]          # (B, 3)
+                        jaw_gt   = gripper_points[:, 1, :] - gripper_points[:, 2, :]
+
+                        # Palm vectors
+                        palm_pred    = outputs[:, 0, :] + outputs[:, 3, :]      # (B, 3)
+                        palm_pred_gt = gripper_points[:, 0, :] + gripper_points[:, 3, :]
+
+                        # Compute cosine losses
+                        jaw_loss  = cosine_loss(jaw_pred, jaw_gt)
+                        palm_loss = cosine_loss(palm_pred, palm_pred_gt)
+
+                        # Average them
+                        cos_loss = 0.5 * (jaw_loss + palm_loss)
+
+                        # Combine losses
+                        loss += cos_loss * args.cosine_loss_weight
+                        accumulated_cos_loss += (cos_loss * args.cosine_loss_weight).item()
+
+                    if args.rotation_loss:
+                        pred_grip_orn_list = []
+                        gt_grip_orn_list = []
+                        for b in range(outputs.shape[0]):  # loop over batch
+                            _, pred_orn = get_gripper_pos_orient_from_4_points(outputs[b].detach().cpu().numpy())
+                            _, gt_orn = get_gripper_pos_orient_from_4_points(gripper_points[b].detach().cpu().numpy())
+                            pred_grip_orn_list.append(pred_orn)
+                            gt_grip_orn_list.append(gt_orn)
+
+                        pred_grip_orn = torch.tensor(np.stack(pred_grip_orn_list), device=device, dtype=torch.float32)
+                        gt_grip_orn   = torch.tensor(np.stack(gt_grip_orn_list), device=device, dtype=torch.float32)
+
+                        # normalize quaternions to be safe
+                        pred_grip_orn = F.normalize(pred_grip_orn, dim=1)
+                        gt_grip_orn   = F.normalize(gt_grip_orn, dim=1)
+
+                        # geodesic quaternion loss
+                        cos = torch.sum(pred_grip_orn * gt_grip_orn, dim=1)  # (B,)
+                        cos = torch.abs(cos)  # q and -q represent same rotation
+                        rot_loss = (1.0 - cos).mean()
+                        loss = loss + rot_loss * 5.0
+                        rotation_loss = rot_loss.item()
+
                     loss = loss + avg_loss * args.weight_loss_weight
                     accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
 
             loss.backward()
             optimizer.step()
+
+            if args.cosine_annealing:
+                scheduler.step()
+
             running_loss += loss.item()
 
-            # if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
-            #     print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
-                
-            #     log_info = {
-            #         "epoch": epoch + 1,
-            #         "global_step": global_step,
-            #         "total_loss": running_loss / 1000,
-            #         "displacement_loss": accumulated_displacement_loss / 1000,
-            #         "weighting_loss": accumulated_weighting_loss / 1000,
-
-            #     }
-            log_interval = len(train_dataloader) // 6
-            if (i+1) % log_interval == 0 and os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / log_interval}")
+            if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
+                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
                 
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "total_loss": running_loss / log_interval,
-                    "displacement_loss": accumulated_displacement_loss / log_interval,
-                    "weighting_loss": accumulated_weighting_loss / log_interval,
+                    "total_loss": running_loss / 1000,
+                    "displacement_loss": accumulated_displacement_loss / 1000,
+                    "weighting_loss": accumulated_weighting_loss / 1000,
+                    "rotation_loss": rotation_loss,
+                    # "cosine_loss": accumulated_cos_loss / 1000,
+
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)
@@ -663,7 +762,18 @@ def train(args):
                 running_loss = 0.0
                 accumulated_displacement_loss = 0.0
                 accumulated_weighting_loss = 0.0
-
+            # log_interval = len(train_dataloader) // 6
+            # if (i+1) % log_interval == 0 and os.environ['LOCAL_RANK'] == '0':
+            #     print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / log_interval}")
+                
+            #     log_info = {
+            #         "epoch": epoch + 1,
+            #         "global_step": global_step,
+            #         "total_loss": running_loss / log_interval,
+            #         "displacement_loss": accumulated_displacement_loss / log_interval,
+            #         "weighting_loss": accumulated_weighting_loss / log_interval,
+            #     }
+            
             global_step += 1
 
         
@@ -772,7 +882,7 @@ def parse_args():
     parser.add_argument('--save_freq', type=int, default=10)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--only_first_stage', action='store_true')
-    parser.add_argument('--exp_path', type=str, default="/project_data/held/ziyuw2/Robogen-sim2real/test_PointNet2/exps")
+    parser.add_argument('--exp_path', type=str, default="")
     parser.add_argument('--model_type', type=str, default='pointnet2')
     parser.add_argument('--load_model_path', type=str, default=None)
     parser.add_argument('--output_obj_pcd_only', action='store_true')
@@ -796,6 +906,10 @@ def parse_args():
     parser.add_argument('--gmm', action='store_true', help="Whether to use GMM loss")
     parser.add_argument('--so2', action='store_true', help="Whether to use SO2 augmentation")
     parser.add_argument('--fixed_variance', type=float, default=0.05)
+    parser.add_argument('--cosine_similarity', action='store_true', help="Whether to use cosine similarity loss")
+    parser.add_argument('--cosine_loss_weight', type=float, default=1.0, help="Weight for the cosine similarity loss")
+    parser.add_argument('--cosine_annealing', action='store_true', help="Whether to use cosine annealing learning rate scheduler")
+    parser.add_argument('--rotation_loss', action='store_true', help="Whether to use rotation loss")
 
     return parser.parse_args()
 

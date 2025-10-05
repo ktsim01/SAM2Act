@@ -201,6 +201,113 @@ def find_latest_checkpoint(directory):
 
     return latest_ckpt, max_epoch
 
+
+import subprocess
+
+def upload_file(local_folder):
+    base = "gs://cmu-gpucloud-ktsim/articubot_exps"
+    folder_name = os.path.basename(local_folder.rstrip("/"))
+    destination = f"{base}/{folder_name}"
+    
+    try:
+        cmd = ["gcloud", "storage", "rsync", "-r", local_folder, destination]
+        # print(cmd)
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print(f"[Success] Uploaded: {local_folder} -> {destination}")
+    except subprocess.CalledProcessError as e:
+        print(f"[Failure] Failed to upload {local_folder}: {e.stderr.strip()}")
+
+import os
+import re
+import tempfile
+from google.cloud import storage
+import subprocess
+
+def load_checkpoint(model, device, load_model_path):
+    if load_model_path is None:
+        return model, 0
+
+    # If the path points to GCS
+    if load_model_path.startswith("gs://"):
+        # Option 1: if load_model_path is a directory, find latest checkpoint
+        if load_model_path.endswith("/"):
+            bucket_name, prefix = parse_gcs_path(load_model_path)
+            latest_ckpt, loaded_epoch = find_latest_checkpoint_gcs(bucket_name, prefix)
+            if latest_ckpt is None:
+                print("No checkpoint found in GCS.")
+                return model, 0
+        else:
+            # Option 2: specific GCS file path
+            match = re.search(r"model_(\d+)\.pth$", load_model_path)
+            loaded_epoch = int(match.group(1)) if match else 0
+            latest_ckpt = load_model_path
+
+        print(f"Downloading model from GCS: {latest_ckpt}")
+        temp_path = download_gcs_blob(latest_ckpt)
+        model.load_state_dict(torch.load(temp_path, map_location=device))
+        print(f"Successfully loaded model from GCS (epoch {loaded_epoch})")
+
+    else:
+        # Local file or directory
+        if os.path.isdir(load_model_path):
+            latest_ckpt, loaded_epoch = find_latest_checkpoint(load_model_path)
+        else:
+            match = re.search(r"model_(\d+)\.pth$", load_model_path)
+            loaded_epoch = int(match.group(1)) if match else 0
+            latest_ckpt = load_model_path
+
+        print(f"Loading model from epoch {loaded_epoch}...")
+        model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+        print("Successfully loaded local model from:", latest_ckpt)
+
+    return model, loaded_epoch
+
+
+# ---------------- Helper functions ---------------- #
+
+def parse_gcs_path(gcs_path):
+    assert gcs_path.startswith("gs://")
+    path = gcs_path[5:]
+    parts = path.split("/", 1)
+    bucket_name = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ""
+    return bucket_name, prefix
+
+def find_latest_checkpoint_gcs(bucket_name, prefix=""):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blobs = bucket.list_blobs(prefix=prefix)
+    pattern = re.compile(r"model_(\d+)\.pth$")
+    max_epoch = 0
+    latest_ckpt = None
+
+    for blob in blobs:
+        match = pattern.search(blob.name)
+        if match:
+            epoch = int(match.group(1))
+            if epoch > max_epoch:
+                max_epoch = epoch
+                latest_ckpt = f"gs://{bucket_name}/{blob.name}"
+
+    return latest_ckpt, max_epoch
+
+def download_gcs_blob(gcs_path):
+    """Downloads a GCS blob to a temporary local file and returns the local path."""
+    bucket_name, blob_name = parse_gcs_path(gcs_path)
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    _, temp_path = tempfile.mkstemp(suffix=".pth")
+    blob.download_to_filename(temp_path)
+    return temp_path
+
+
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
@@ -266,12 +373,7 @@ def train(args):
     
     loaded_epoch = None
     if args.load_model_path is not None:
-        match = re.search(r'model_(\d+)\.pth$', args.load_model_path)
-        if match:
-            loaded_epoch = int(match.group(1))
-            print(f"Loading model from epoch {loaded_epoch}...")
-        model.load_state_dict(torch.load(args.load_model_path, map_location=device))
-        print("Successfully load model from: ", args.load_model_path)
+        model, loaded_epoch = load_checkpoint(model, device, args.load_model_path)
     
     criterion = torch.nn.MSELoss()
     ce_loss = torch.nn.CrossEntropyLoss()
@@ -335,7 +437,7 @@ def train(args):
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
-    latest_ckpt, latest_epoch = find_latest_checkpoint(args.exp_path)
+    latest_ckpt, latest_epoch = find_latest_checkpoint_gcs("cmu-gpucloud-ktsim", "articubot_exps/" + output_dir)
         
     if latest_ckpt is not None:
         print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
@@ -688,6 +790,7 @@ def train(args):
         if (epoch + 1) % args.save_freq == 0 and os.environ['LOCAL_RANK'] == '0':
             save_path = f"{args.exp_path}/model_{epoch + 1}.pth"
             torch.save(model.module.state_dict(), save_path)
+            upload_file(args.exp_path)
 
     print('Finished Training')
 

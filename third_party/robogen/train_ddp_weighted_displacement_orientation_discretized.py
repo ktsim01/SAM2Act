@@ -369,7 +369,7 @@ def train(args):
     
     loaded_epoch = None
     if args.load_model_path is not None:
-        model, epoch = load_checkpoint(model, device, args.load_model_path)
+        model, loaded_epoch = load_checkpoint(model, device, args.load_model_path)
 
     criterion = torch.nn.MSELoss()
     ce_loss = torch.nn.CrossEntropyLoss()
