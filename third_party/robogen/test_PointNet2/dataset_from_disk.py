@@ -142,6 +142,8 @@ class PointNetDatasetFromDisk(torch.utils.data.Dataset):
         with open(step_path, 'rb') as f:
             data = pickle.load(f)
         pointcloud = data['point_cloud'][:][0].astype(np.float32)
+        if 'features' in data:
+            pointcloud = np.concatenate([pointcloud, data['features'][:][0].astype(np.float32)], axis=-1)
         gripper_pcd = data['gripper_pcd'][:][0].astype(np.float32)
         goal_gripper_pcd = data['goal_gripper_pcd'][:][0].astype(np.float32)
         gripper_open = data['action'][-2].astype(np.float32)
