@@ -292,6 +292,8 @@ def find_latest_checkpoint_gcs(bucket_name, prefix=""):
     latest_ckpt = None
 
     for blob in blobs:
+        if not blob.name.startswith(prefix) or "/" in blob.name[len(prefix):]:
+            continue
         match = pattern.search(blob.name)
         if match:
             epoch = int(match.group(1))

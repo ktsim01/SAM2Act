@@ -34,6 +34,8 @@ def find_latest_checkpoint(directory):
     max_epoch = 0
     latest_ckpt = None
     for ckpt in checkpoint_files:
+        if not blob.name.startswith(prefix) or "/" in blob.name[len(prefix):]:
+            continue
         match = pattern.search(ckpt)
         if match:
             epoch = int(match.group(1))
@@ -129,8 +131,6 @@ def find_latest_checkpoint_gcs(bucket_name, prefix=""):
     latest_ckpt = None
 
     for blob in blobs:
-        if not blob.name.startswith(prefix) or "/" in blob.name[len(prefix):]:
-            continue
         match = pattern.search(blob.name)
         if match:
             epoch = int(match.group(1))
@@ -274,14 +274,16 @@ def train(args):
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
 
-    latest_ckpt, latest_epoch = find_latest_checkpoint_gcs("cmu-gpucloud-ktsim", "articubot_exps/" + output_dir)
+    # latest_ckpt, latest_epoch = find_latest_checkpoint_gcs("cmu-gpucloud-ktsim", "articubot_exps/" + output_dir)
         
-    if latest_ckpt is not None:
-        print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
-        model.load_state_dict(torch.load(latest_ckpt, map_location=device))
-        print("Successfully loaded model from: ", latest_ckpt)
-    elif loaded_epoch is not None:
-        latest_epoch = loaded_epoch
+    # if latest_ckpt is not None:
+    #     print(f"Found latest checkpoint: {latest_ckpt}, epoch: {latest_epoch}")
+    #     model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+    #     print("Successfully loaded model from: ", latest_ckpt)
+    # elif loaded_epoch is not None:
+    #     latest_epoch = loaded_epoch
+
+    latest_epoch = loaded_epoch
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     model.train()
@@ -369,258 +371,94 @@ def train(args):
     global_step = 0
     min_val_loss = float('inf')
 
-    for epoch in range(args.num_epochs):
-        if epoch < latest_epoch:
-            print(f"Skipping epoch {epoch + 1} as it is less than the latest epoch {latest_epoch}")
-            continue
+    accumulated_val_loss = 0.0
+    first_point_mse = 0.0
+    second_point_mse = 0.0
+    third_point_mse = 0.0
+    fourth_point_mse = 0.0
 
-        running_loss = 0.0
-        accumulated_displacement_loss = 0.0
-        accumulated_weighting_loss = 0.0
-        for i, data in enumerate(tqdm(train_dataloader)):
-            if args.n_obs_steps > 1:
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_pcd_history = data
-            else:
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
+    model.eval()
+    for i, data in enumerate(tqdm(val_dataloader)):
+        pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
+        gripper_points = goal_gripper_pcd
 
-            # inputs: B, N, 3
-            # gripper_pcd: B, 4, 3
-            # goal_gripper_points: B, 4, 3
-            # gripper_pcd_history: B, H, 4, 3
-            # calculate the displacement from every point to the gripper to get the labels with shape B, N, 4, 3
-            
-            if args.use_color:
-                gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
-            else:
-                # features = pointcloud[..., 3:]
-                # pointcloud = pointcloud[..., :3]
-                gripper_pcd = torch.cat([gripper_pcd, torch.zeros((gripper_pcd.shape[0], gripper_pcd.shape[1], 32))], dim=2)
+        if not args.use_color:
+            # pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
+            gripper_pcd = torch.cat([gripper_pcd, torch.zeros((gripper_pcd.shape[0], gripper_pcd.shape[1], 32))], dim=2)
+        
+        if args.use_color:
+            gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
 
-            gripper_points = goal_gripper_pcd
+        if args.add_one_hot_encoding:
+            pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
+            pointcloud_one_hot[:, :, 0] = 1
+            pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
+            gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
+            gripper_pcd_one_hot[:, :, 1] = 1
+            gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
 
-            if not args.predict_two_goals:
-                if args.add_one_hot_encoding:
-                    # for pointcloud, we add (1, 0)
-                    # for gripper_pcd, we add (0, 1)
-                    pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
-                    pointcloud_one_hot[:, :, 0] = 1
-                    pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
-                    gripper_pcd_one_hot[:, :, 1] = 1
-                    gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
-                    inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
-                else:
-                    inputs = torch.cat([pointcloud, gripper_pcd], dim=1) # B, N+4, 3
-                    if args.n_obs_steps > 1:
-                        B, H, _, _, = gripper_pcd_history.shape
-                        gripper_pcd_history = gripper_pcd_history.reshape(B, -1, 3)
-                        inputs = torch.cat([inputs, gripper_pcd_history], dim=1) # B, N+4+4*history, 3
-            else:
-                inputs = pointcloud
 
-            labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-            B, N, _, _ = labels.shape
-            labels = labels.view(B, N, -1) # B, N, 12
+        inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
 
-            inputs, labels = inputs.to(device), labels.to(device)
+        labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
+        B, N, _, _ = labels.shape
+        labels = labels.view(B, N, -1) # B, N, 12
+
+        inputs, labels = inputs.to(device), labels.to(device)
+        inputs = inputs.permute(0, 2, 1)
+        with torch.no_grad():
+            outputs = model(inputs, lang_feats) # B, N, 13
+
+        weights = outputs[:, :, -1] # B, N
+        outputs = outputs[:, :, :-1] # B, N, 12
+
+        if args.using_weight:
             inputs = inputs.permute(0, 2, 1)
-            optimizer.zero_grad()
-
-            if args.use_text:
-                outputs = model(inputs, lang_feats) # B, N, 15
+            if not args.predict_two_goals:
+                outputs = outputs.view(B, N, 4, 3)
             else:
-                outputs = model(inputs)
+                outputs = outputs.view(B, N, 8, 3)
+            outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
 
-            weights = outputs[:, :, -1] # B, N
-            outputs = outputs[:, :, :-1] # B, N, 12
-
-            if args.output_obj_pcd_only:
-                weights = weights[:, :-4]
-                outputs = outputs[:, :-4, :]
-                labels = labels[:, :-4, :]
-                inputs = inputs[:, :, :-4]
-                N = N - 4
+            # softmax the weights
+            weights = torch.nn.functional.softmax(weights, dim=1)
 
             if args.gmm:
-                diff = outputs - labels  # Shape: (B, N, 12)
-                # fixed_variance = random.choice(args.fixed_variance)
-                ### looping through these two possible variance values
-                log_info = {}
-                loss = 0
-                fixed_variance = [0.05, 0.001]
-                variance_loss_scale = [1, 0.1]
-                for fixed_variance, variance_loss_scale in zip(fixed_variance, variance_loss_scale):
-                    exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
-                    log_gaussians = exponent 
-
-                    # Compute log mixing coefficients
-                    log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
-                    log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-20)  # Prevent extreme values
-
-                    max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
-                    log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
-                    
-                    this_loss = -torch.mean(log_probs)  # B,
-                    loss += this_loss * variance_loss_scale
-                    
-                    log_info["gmm_" + str(fixed_variance)] = this_loss.item()
-                    log_info["gmm_" + str(fixed_variance) + "_scaled"] = (this_loss * variance_loss_scale).item()
-
-
-            elif args.using_weight:
-                loss = criterion(outputs, labels)
-                accumulated_displacement_loss += loss.item()
-
-                inputs = inputs.permute(0, 2, 1)
-                if not args.predict_two_goals:
-                    outputs = outputs.view(B, N, 4, 3)
-                else:
-                    outputs = outputs.view(B, N, 8, 3)
-                outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
-
-                # softmax the weights
-                weights = torch.nn.functional.softmax(weights, dim=1)
-                
+                sampled_index = torch.argmax(weights, dim=1) # B, 1
+                batch_indices = torch.arange(B, device=device) # B,
+                displacement_mean = outputs[batch_indices, sampled_index, :, :] # B, 4, 3
+                input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
+                prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
+                accumulated_val_loss += criterion(prediction, gripper_points.to(device))
+                first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+            
+            else:
                 # sum the displacement of the predicted gripper point cloud according to the weights
                 outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
                 outputs = outputs.sum(dim=1)
-                avg_loss = criterion(outputs, gripper_points.to(device))
-
-                loss = loss + avg_loss * args.weight_loss_weight
-                accumulated_weighting_loss += (avg_loss * args.weight_loss_weight).item()
-
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-
-            if (i+1) % 10 == 0 and os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, loss: {running_loss / 1000}")
-                
-                log_info = {
-                    "epoch": epoch + 1,
-                    "global_step": global_step,
-                    "total_loss": running_loss / 1000,
-                    "displacement_loss": accumulated_displacement_loss / 1000,
-                    "weighting_loss": accumulated_weighting_loss / 1000,
-
-                }
-
-                if args.wandb:
-                    wandb_run.log(log_info, step=global_step)
-
-                running_loss = 0.0
-                accumulated_displacement_loss = 0.0
-                accumulated_weighting_loss = 0.0
-
-            global_step += 1
-
+                accumulated_val_loss += criterion(outputs, gripper_points.to(device))
         
-        if (epoch + 1) % 5 == 0:
-            accumulated_val_loss = 0.0
-            first_point_mse = 0.0
-            second_point_mse = 0.0
-            third_point_mse = 0.0
-            fourth_point_mse = 0.0
+    torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+    accumulated_val_loss = accumulated_val_loss.item()
 
-            model.eval()
-            for i, data in enumerate(tqdm(val_dataloader)):
-                pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
-                gripper_points = goal_gripper_pcd
+    if os.environ['LOCAL_RANK'] == '0':
+        print(f"Epoch {loaded_epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / len(val_dataloader.dataset)}")
 
-                if not args.use_color:
-                    # pointcloud = pointcloud[..., :3]  # Ensure only xyz coordinates are used
-                    gripper_pcd = torch.cat([gripper_pcd, torch.zeros((gripper_pcd.shape[0], gripper_pcd.shape[1], 32))], dim=2)
-                
-                if args.use_color:
-                    gripper_pcd = torch.cat([gripper_pcd, torch.ones(gripper_pcd.shape)], dim=2)
+        log_info = {
+            "global_step": global_step,
+            "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
+            "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            "fourth_point_mse": fourth_point_mse * 3 *args.batch_size / len(val_dataloader.dataset),
+        
+        }
 
-                if args.add_one_hot_encoding:
-                    pointcloud_one_hot = torch.zeros(pointcloud.shape[0], pointcloud.shape[1], 2)
-                    pointcloud_one_hot[:, :, 0] = 1
-                    pointcloud_ = torch.cat([pointcloud, pointcloud_one_hot], dim=2)
-                    gripper_pcd_one_hot = torch.zeros(gripper_pcd.shape[0], gripper_pcd.shape[1], 2)
-                    gripper_pcd_one_hot[:, :, 1] = 1
-                    gripper_pcd_ = torch.cat([gripper_pcd, gripper_pcd_one_hot], dim=2)
+        print(log_info)
 
-
-                inputs = torch.cat([pointcloud_, gripper_pcd_], dim=1) # B, N+4, 5
-
-                labels = gripper_points.unsqueeze(1) - inputs[:, :, :3].unsqueeze(2)
-                B, N, _, _ = labels.shape
-                labels = labels.view(B, N, -1) # B, N, 12
-
-                inputs, labels = inputs.to(device), labels.to(device)
-                inputs = inputs.permute(0, 2, 1)
-                with torch.no_grad():
-                    outputs = model(inputs, lang_feats) # B, N, 13
-
-                weights = outputs[:, :, -1] # B, N
-                outputs = outputs[:, :, :-1] # B, N, 12
-
-                if args.using_weight:
-                    inputs = inputs.permute(0, 2, 1)
-                    if not args.predict_two_goals:
-                        outputs = outputs.view(B, N, 4, 3)
-                    else:
-                        outputs = outputs.view(B, N, 8, 3)
-                    outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
-
-                    # softmax the weights
-                    weights = torch.nn.functional.softmax(weights, dim=1)
-
-                    if args.gmm:
-                        sampled_index = torch.argmax(weights, dim=1) # B, 1
-                        batch_indices = torch.arange(B, device=device) # B,
-                        displacement_mean = outputs[batch_indices, sampled_index, :, :] # B, 4, 3
-                        input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
-                        prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
-                        accumulated_val_loss += criterion(prediction, gripper_points.to(device))
-                        first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
-                        second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
-                        third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
-                        fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
-                    
-                    else:
-                        # sum the displacement of the predicted gripper point cloud according to the weights
-                        outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
-                        outputs = outputs.sum(dim=1)
-                        accumulated_val_loss += criterion(outputs, gripper_points.to(device))
-                
-            torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
-            accumulated_val_loss = accumulated_val_loss.item()
-
-            if os.environ['LOCAL_RANK'] == '0':
-                print(f"Epoch {epoch + 1}, iter {i + 1}, val loss: {accumulated_val_loss / len(val_dataloader.dataset)}")
-
-                log_info = {
-                    "epoch": epoch + 1,
-                    "global_step": global_step,
-                    "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
-                    "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-                    "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-                    "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-                    "fourth_point_mse": fourth_point_mse * 3 *args.batch_size / len(val_dataloader.dataset),
-                
-                }
-                if args.wandb:
-                    wandb_run.log(log_info, step=global_step)
-
-                if accumulated_val_loss < min_val_loss:
-                    min_val_loss = accumulated_val_loss
-                    if os.environ['LOCAL_RANK'] == '0':
-                        save_path = f"{args.exp_path}/best_model.pth"
-                        torch.save(model.module.state_dict(), save_path)
-                        print(f"Saved best model to {save_path}")
-                accumulated_val_loss = 0.0
-            
-            model.train()
-
-        if (epoch + 1) % args.save_freq == 0 and os.environ['LOCAL_RANK'] == '0':
-            save_path = f"{args.exp_path}/model_{epoch + 1}.pth"
-            torch.save(model.module.state_dict(), save_path)
-            upload_file(args.exp_path)
-
-    print('Finished Training')
 
 
 def parse_args():
