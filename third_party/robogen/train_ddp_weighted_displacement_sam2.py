@@ -209,7 +209,8 @@ def train(args):
     
     loaded_epoch = None
     if args.load_model_path is not None:
-        model, epoch = load_checkpoint(model, device, args.load_model_path)
+        model, loaded_epoch = load_checkpoint(model, device, args.load_model_path)
+        model.to(device)
 
     criterion = torch.nn.MSELoss()
     bce_loss = torch.nn.BCEWithLogitsLoss()
@@ -263,7 +264,10 @@ def train(args):
 
     if args.use_text:
         output_dir = output_dir + "_use_text"
-        
+    
+    if args.gmm:
+        output_dir = output_dir + "_gmm"
+
     output_dir += "_" + args.exp_name
     
     args.exp_path = os.path.join(args.exp_path, output_dir)
@@ -435,10 +439,36 @@ def train(args):
                 inputs = inputs[:, :, :-4]
                 N = N - 4
 
-            loss = criterion(outputs, labels)
-            accumulated_displacement_loss += loss.item()
+            if args.gmm:
+                diff = outputs - labels  # Shape: (B, N, 12)
+                # fixed_variance = random.choice(args.fixed_variance)
+                ### looping through these two possible variance values
+                log_info = {}
+                loss = 0
+                fixed_variance = [0.05, 0.001]
+                variance_loss_scale = [1, 0.1]
+                for fixed_variance, variance_loss_scale in zip(fixed_variance, variance_loss_scale):
+                    exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
+                    log_gaussians = exponent 
 
-            if args.using_weight:
+                    # Compute log mixing coefficients
+                    log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
+                    log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-20)  # Prevent extreme values
+
+                    max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
+                    log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
+                    
+                    this_loss = -torch.mean(log_probs)  # B,
+                    loss += this_loss * variance_loss_scale
+                    
+                    log_info["gmm_" + str(fixed_variance)] = this_loss.item()
+                    log_info["gmm_" + str(fixed_variance) + "_scaled"] = (this_loss * variance_loss_scale).item()
+
+
+            elif args.using_weight:
+                loss = criterion(outputs, labels)
+                accumulated_displacement_loss += loss.item()
+
                 inputs = inputs.permute(0, 2, 1)
                 if not args.predict_two_goals:
                     outputs = outputs.view(B, N, 4, 3)
@@ -563,6 +593,7 @@ def train(args):
         if (epoch + 1) % args.save_freq == 0 and os.environ['LOCAL_RANK'] == '0':
             save_path = f"{args.exp_path}/model_{epoch + 1}.pth"
             torch.save(model.module.state_dict(), save_path)
+            upload_file(args.exp_path)
 
     print('Finished Training')
 
@@ -600,6 +631,7 @@ def parse_args():
     parser.add_argument('--use_color', action='store_true')
     parser.add_argument('--wandb', action='store_true', help="Whether to use wandb for logging")
     parser.add_argument('--use_text', action='store_true', help="Whether to use text input")
+    parser.add_argument('--gmm', action='store_true', help="Whether to use gmm loss")
 
 
     return parser.parse_args()

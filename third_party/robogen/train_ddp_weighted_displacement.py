@@ -644,20 +644,44 @@ def train(args):
                 N = N - 4
 
             if args.gmm:
-                diff = outputs - labels  # Shape: (B, N, 12)
-                fixed_variance = args.fixed_variance
-                exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
-                log_gaussians = exponent 
+                # diff = outputs - labels  # Shape: (B, N, 12)
+                # fixed_variance = args.fixed_variance
+                # exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
+                # log_gaussians = exponent 
 
-                # Compute log mixing coefficients
-                log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
-                log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-10)  # Prevent extreme values
+                # # Compute log mixing coefficients
+                # log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
+                # log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-10)  # Prevent extreme values
 
-                max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
-                log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
+                # max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
+                # log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
                 
-                loss = -torch.mean(log_probs) # mean of the negative log likelihood
-                accumulated_displacement_loss += loss.item()
+                # loss = -torch.mean(log_probs) # mean of the negative log likelihood
+                # accumulated_displacement_loss += loss.item()
+                diff = outputs - labels  # Shape: (B, N, 12)
+                # fixed_variance = random.choice(args.fixed_variance)
+                ### looping through these two possible variance values
+                log_info = {}
+                loss = 0
+                # fixed_variance = [0.05, 0.001]
+                # variance_loss_scale = [1, 0.1]
+
+                for fixed_variance, variance_loss_scale in zip(args.variance, args.variance_loss_scale):
+                    exponent = -0.5 * torch.sum((diff ** 2) / fixed_variance, dim=2)  # Shape: (B, N), sum over the guassian dimension
+                    log_gaussians = exponent 
+
+                    # Compute log mixing coefficients
+                    log_mixing_coeffs = torch.log_softmax(weights, dim=1) # softmax the weight along the per-point dimension, shape B, N
+                    log_mixing_coeffs = torch.clamp(log_mixing_coeffs, min=-20)  # Prevent extreme values
+
+                    max_log = torch.max(log_gaussians + log_mixing_coeffs, dim=1, keepdim=True).values # get the per-batch max log along all the points, B, 1
+                    log_probs = max_log.squeeze(1) + torch.logsumexp(log_gaussians + log_mixing_coeffs - max_log, dim=1) # B,
+                    
+                    this_loss = -torch.mean(log_probs)  # B,
+                    loss += this_loss * variance_loss_scale
+                    
+                    log_info["gmm_" + str(fixed_variance)] = this_loss.item()
+                    log_info["gmm_" + str(fixed_variance) + "_scaled"] = (this_loss * variance_loss_scale).item()
             
             else:
                 loss = criterion(outputs, labels)
@@ -745,6 +769,7 @@ def train(args):
                     "displacement_loss": accumulated_displacement_loss / 1000,
                     "weighting_loss": accumulated_weighting_loss / 1000,
                     "rotation_loss": rotation_loss,
+                    **log_info,
                     # "cosine_loss": accumulated_cos_loss / 1000,
 
                 }
@@ -771,6 +796,11 @@ def train(args):
         
         if (epoch + 1) % 5 == 0:
             accumulated_val_loss = 0.0
+            first_point_mse = 0.0
+            second_point_mse = 0.0
+            third_point_mse = 0.0
+            fourth_point_mse = 0.0
+
             model.eval()
             for i, data in enumerate(tqdm(val_dataloader)):
                 pointcloud, gripper_pcd, goal_gripper_pcd, gripper_open_gt, collision_gt, lang_feats = data
@@ -822,6 +852,11 @@ def train(args):
                         input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
                         prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
                         accumulated_val_loss += criterion(prediction, gripper_points.to(device))
+                        first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                        second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                        third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                        fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+
                     else:
                         outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
 
@@ -840,6 +875,10 @@ def train(args):
                     "epoch": epoch + 1,
                     "global_step": global_step,
                     "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
+                    "first_point_mse": first_point_mse * 3 / len(val_dataloader.dataset),
+                    "second_point_mse": second_point_mse * 3 / len(val_dataloader.dataset),
+                    "third_point_mse": third_point_mse * 3 / len(val_dataloader.dataset),
+                    "fourth_point_mse": fourth_point_mse * 3 / len(val_dataloader.dataset),
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)
@@ -902,7 +941,8 @@ def parse_args():
     parser.add_argument('--cosine_loss_weight', type=float, default=1.0, help="Weight for the cosine similarity loss")
     parser.add_argument('--cosine_annealing', action='store_true', help="Whether to use cosine annealing learning rate scheduler")
     parser.add_argument('--rotation_loss', action='store_true', help="Whether to use rotation loss")
-
+    parser.add_argument('--variance', nargs="+", type=float, default=[0.05, 0.001], help="Variance for GMM loss")
+    parser.add_argument('--variance_loss_scale', nargs="+", type=float, default=[1, 0.1], help="Variance loss scaling for GMM loss")
     return parser.parse_args()
 
 
