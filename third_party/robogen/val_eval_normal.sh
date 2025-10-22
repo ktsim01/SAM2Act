@@ -41,7 +41,7 @@ TASK="insert_onto_square_peg"
 #     exit 1
 # fi
 
-NP=2
+NP=1
 BS=10
 EPOCHS=500
 EXP_PATH=/home/ktsim/Projects/SAM2Act/third_party/robogen/test_PointNet2/exps
@@ -60,7 +60,10 @@ torchrun --standalone --nproc_per_node=$NP val_eval_normal.py \
     --use_all_data \
     --use_text \
     --add_one_hot_encoding 1 \
-    --gmm \
     --use_color \
-    --load_model_path /home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-10-19_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_gmm_/model_300.pth \
+    --gmm \
+    --load_model_path /home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-10-19_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_gmm_/best_model.pth \
+    # --load_model_path /home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-08-24_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_/model_310.pth \
+    # --load_model_path /home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-10-16_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_gmm_/model_140.pth \
+    # --load_model_path /home/ktsim/checkpoints/pointnet2_text_10k_model_invariant_2025-10-19_use_all_data_insert_onto_square_peg-obj_one_hot_use_color_use_text_gmm_/model_300.pth \
     # --wandb

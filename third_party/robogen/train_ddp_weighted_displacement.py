@@ -854,10 +854,14 @@ def train(args):
                         input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
                         prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
                         accumulated_val_loss += criterion(prediction, gripper_points.to(device))
-                        first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
-                        second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
-                        third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
-                        fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                        # first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                        # second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                        # third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                        # fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                        first_point_mse += torch.norm(prediction[:, 0, :] - gripper_points.to(device)[:, 0, :], dim=1).pow(2).sum()
+                        second_point_mse += torch.norm(prediction[:, 1, :] - gripper_points.to(device)[:, 1, :], dim=1).pow(2).sum()
+                        third_point_mse += torch.norm(prediction[:, 2, :] - gripper_points.to(device)[:, 2, :], dim=1).pow(2).sum()
+                        fourth_point_mse += torch.norm(prediction[:, 3, :] - gripper_points.to(device)[:, 3, :], dim=1).pow(2).sum()
 
                     else:
                         outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
@@ -868,6 +872,11 @@ def train(args):
                         accumulated_val_loss += criterion(outputs, gripper_points.to(device))
             
             torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(first_point_mse, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(second_point_mse, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(third_point_mse, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(fourth_point_mse, op=torch.distributed.ReduceOp.SUM)
+
             accumulated_val_loss = accumulated_val_loss.item()
 
             if os.environ['LOCAL_RANK'] == '0':
@@ -876,11 +885,11 @@ def train(args):
                 log_info = {
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
-                    "first_point_mse": first_point_mse * 3 / len(val_dataloader.dataset),
-                    "second_point_mse": second_point_mse * 3 / len(val_dataloader.dataset),
-                    "third_point_mse": third_point_mse * 3 / len(val_dataloader.dataset),
-                    "fourth_point_mse": fourth_point_mse * 3 / len(val_dataloader.dataset),
+                    "accumulated_val_loss": accumulated_val_loss * args.batch_size / len(val_dataloader.dataset),
+                    "first_point_mse": first_point_mse / len(val_dataloader.dataset),
+                    "second_point_mse": second_point_mse / len(val_dataloader.dataset),
+                    "third_point_mse": third_point_mse / len(val_dataloader.dataset),
+                    "fourth_point_mse": fourth_point_mse / len(val_dataloader.dataset),
                 }
                 if args.wandb:
                     wandb_run.log(log_info, step=global_step)

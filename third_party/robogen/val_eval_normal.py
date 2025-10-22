@@ -314,6 +314,103 @@ def download_gcs_blob(gcs_path):
     blob.download_to_filename(temp_path)
     return temp_path
 
+import torch
+
+def kabsch_rotation_torch_batch(P, Q):
+    """
+    Compute optimal rotation matrices (B, 3, 3) that align P -> Q using Kabsch algorithm.
+    P, Q: (B, N, 3) tensors of B batches, N points each.
+    """
+    # Center points
+    Pc = P - P.mean(dim=1, keepdim=True)
+    Qc = Q - Q.mean(dim=1, keepdim=True)
+
+    # Cross-covariance
+    H = torch.matmul(Pc.transpose(1, 2), Qc)  # (B,3,3)
+
+    # SVD
+    U, S, Vt = torch.linalg.svd(H)
+    Rmat = torch.matmul(Vt.transpose(-2, -1), U.transpose(-2, -1))
+
+    # Reflection correction
+    dets = torch.det(Rmat)
+    mask = dets < 0
+    if mask.any():
+        Vt[mask, -1, :] *= -1
+        Rmat[mask] = torch.matmul(Vt[mask].transpose(-2, -1), U[mask].transpose(-2, -1))
+
+    return Rmat
+
+
+def rotation_to_quaternion_batch(Rmat):
+    """
+    Convert batched rotation matrices (B,3,3) to quaternions (B,4) [x,y,z,w].
+    """
+    m00, m01, m02 = Rmat[:,0,0], Rmat[:,0,1], Rmat[:,0,2]
+    m10, m11, m12 = Rmat[:,1,0], Rmat[:,1,1], Rmat[:,1,2]
+    m20, m21, m22 = Rmat[:,2,0], Rmat[:,2,1], Rmat[:,2,2]
+
+    qw = torch.sqrt(torch.clamp(1.0 + m00 + m11 + m22, min=0)) / 2
+    qx = torch.sqrt(torch.clamp(1.0 + m00 - m11 - m22, min=0)) / 2
+    qy = torch.sqrt(torch.clamp(1.0 - m00 + m11 - m22, min=0)) / 2
+    qz = torch.sqrt(torch.clamp(1.0 - m00 - m11 + m22, min=0)) / 2
+
+    qx = torch.copysign(qx, m21 - m12)
+    qy = torch.copysign(qy, m02 - m20)
+    qz = torch.copysign(qz, m10 - m01)
+
+    quat = torch.stack((qx, qy, qz, qw), dim=-1)
+    quat = quat / quat.norm(dim=-1, keepdim=True)
+    return quat
+
+
+def quaternion_angle_torch_batch(q1, q2):
+    """
+    Compute angular distance (radians) between two batches of quaternions (B,4).
+    """
+    dot = torch.abs(torch.sum(q1 * q2, dim=-1))
+    dot = torch.clamp(dot, -1.0, 1.0)
+    return 2.0 * torch.acos(dot)
+
+
+def gripper_quaternion_distance_torch_batch(P, Q, q_ref=None):
+    """
+    Compute quaternion rotation aligning P -> Q for batches, and optionally distance to q_ref.
+    P, Q: (B,N,3) tensors.
+    q_ref: (B,4) or None
+    Returns:
+        angle: (B,) radians
+        quat: (B,4)
+        Rmat: (B,3,3)
+    """
+    Rmat = kabsch_rotation_torch_batch(P, Q)
+    quat = rotation_to_quaternion_batch(Rmat)
+
+    if q_ref is not None:
+        angle = quaternion_angle_torch_batch(quat, q_ref)
+    else:
+        # angle of this rotation itself
+        w = quat[:, -1].abs()
+        w = torch.clamp(w, -1.0, 1.0)
+        angle = 2 * torch.acos(w)
+
+    return angle, quat, Rmat
+
+def gripper_quaternion_distance_torch_batch_circular(P, Q, q_ref=None, symmetry_deg=180.0):
+    """
+    Computes rotation angle for batches, taking symmetry into account.
+    symmetry_deg: degrees of rotational symmetry (default 180 for half-turn symmetry)
+    """
+    angle, quat, Rmat = gripper_quaternion_distance_torch_batch(P, Q, q_ref=q_ref)
+
+    # Wrap around symmetry
+    symmetry_rad = torch.deg2rad(torch.tensor(symmetry_deg))
+    angle_circular = torch.remainder(angle, symmetry_rad)
+    # choose minimal distance
+    angle_circular = torch.minimum(angle_circular, symmetry_rad - angle_circular)
+
+    return angle_circular, quat, Rmat
+
 def train(args):
     gpu_id = int(os.environ["LOCAL_RANK"])
     device = torch.device(gpu_id)
@@ -522,18 +619,18 @@ def train(args):
     #             num_workers=4,
     #             pin_memory=True,
     #             )
-    train_dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
-                                      end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
-                                      use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
-                                      dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
-                                      predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False)
-    train_dataloader = DataLoader(train_dataset, 
-                shuffle=False,
-                sampler=DistributedSampler(train_dataset),
-                batch_size=args.batch_size,
-                num_workers=2,
-                pin_memory=True,
-                )
+    # train_dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
+    #                                   end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
+    #                                   use_all_data=args.use_all_data, use_combined_action=args.use_combined_action, 
+    #                                   dataset_prefix=args.dataset_prefix, num_train_objects=args.num_train_objects,
+    #                                   predict_two_goals=args.predict_two_goals, n_obs_steps=args.n_obs_steps, val=False)
+    # train_dataloader = DataLoader(train_dataset, 
+    #             shuffle=False,
+    #             sampler=DistributedSampler(train_dataset),
+    #             batch_size=args.batch_size,
+    #             num_workers=2,
+    #             pin_memory=True,
+    #             )
     
     val_dataset = get_dataset_from_pickle(all_obj_paths=args.all_zarr_path, beg_ratio=args.beg_ratio,
                                       end_ratio=args.end_ratio, only_first_stage=args.only_first_stage,
@@ -555,6 +652,7 @@ def train(args):
     second_point_mse = 0.0
     third_point_mse = 0.0
     fourth_point_mse = 0.0
+    rotation_error_avg = 0.0
 
     model.eval()
     for i, data in enumerate(tqdm(val_dataloader)):
@@ -607,10 +705,19 @@ def train(args):
                 input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
                 prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
                 accumulated_val_loss += criterion(prediction, gripper_points.to(device))
-                first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
-                second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
-                third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
-                fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                # first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                # second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                # third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                # fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                first_point_mse += torch.norm(prediction[:, 0, :] - gripper_points.to(device)[:, 0, :], dim=1).pow(2).sum()
+                second_point_mse += torch.norm(prediction[:, 1, :] - gripper_points.to(device)[:, 1, :], dim=1).pow(2).sum()
+                third_point_mse += torch.norm(prediction[:, 2, :] - gripper_points.to(device)[:, 2, :], dim=1).pow(2).sum()
+                fourth_point_mse += torch.norm(prediction[:, 3, :] - gripper_points.to(device)[:, 3, :], dim=1).pow(2).sum()
+                rotation_error, _, _ = gripper_quaternion_distance_torch_batch_circular(
+                    prediction, gripper_points.to(device)
+                )
+
+                rotation_error_avg += rotation_error.sum()
 
             else:
                 outputs = outputs + inputs[:, :, :3].unsqueeze(2) # B, N, 4, 3
@@ -618,37 +725,54 @@ def train(args):
                 # sum the displacement of the predicted gripper point cloud according to the weights
                 outputs = outputs * weights.unsqueeze(-1).unsqueeze(-1)
                 outputs = outputs.sum(dim=1)
+                # first_point_mse += criterion(outputs[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                # second_point_mse += criterion(outputs[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                # third_point_mse += criterion(outputs[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                # fourth_point_mse += criterion(outputs[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                first_point_mse += torch.norm(outputs[:, 0, :] - gripper_points.to(device)[:, 0, :], dim=1).pow(2).sum()
+                second_point_mse += torch.norm(outputs[:, 1, :] - gripper_points.to(device)[:, 1, :], dim=1).pow(2).sum()
+                third_point_mse += torch.norm(outputs[:, 2, :] - gripper_points.to(device)[:, 2, :], dim=1).pow(2).sum()
+                fourth_point_mse += torch.norm(outputs[:, 3, :] - gripper_points.to(device)[:, 3, :], dim=1).pow(2).sum()
+
+                rotation_error, _, _ = gripper_quaternion_distance_torch_batch_circular(
+                    outputs, gripper_points.to(device)
+                )
+
+                rotation_error_avg += rotation_error.sum()
+
+
                 accumulated_val_loss += criterion(outputs, gripper_points.to(device))
     
     torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(first_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(second_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(third_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(fourth_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(rotation_error, op=torch.distributed.ReduceOp.SUM)
+
     accumulated_val_loss = accumulated_val_loss.item()
 
     if os.environ['LOCAL_RANK'] == '0':
 
         log_info = {
             "global_step": global_step,
-            "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
-            "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "fourth_point_mse": fourth_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            "accumulated_val_loss": accumulated_val_loss * 12 * args.batch_size / len(val_dataloader.dataset),
+            # "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "fourth_point_mse": fourth_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            "first_point_mse": first_point_mse / len(val_dataloader.dataset),
+            "second_point_mse": second_point_mse / len(val_dataloader.dataset),
+            "third_point_mse": third_point_mse / len(val_dataloader.dataset),
+            "fourth_point_mse": fourth_point_mse / len(val_dataloader.dataset),
+            "rotation_error_avg": rotation_error_avg / len(val_dataloader.dataset)
         }
 
-        print("First Point MSE: ", log_info["first_point_mse"])
-        print("Second Point MSE: ", log_info["second_point_mse"])
-        print("Third Point MSE: ", log_info["third_point_mse"])
-        print("Fourth Point MSE: ", log_info["fourth_point_mse"])
-
-        if args.wandb:
-            wandb_run.log(log_info, step=global_step)
-
-        if accumulated_val_loss < min_val_loss:
-            min_val_loss = accumulated_val_loss
-            if os.environ['LOCAL_RANK'] == '0':
-                save_path = f"{args.exp_path}/best_model.pth"
-                torch.save(model.module.state_dict(), save_path)
-                print(f"Saved best model to {save_path}")
-        accumulated_val_loss = 0.0
+        print("First Point MSE: ", log_info["first_point_mse"].item())
+        print("Second Point MSE: ", log_info["second_point_mse"].item())
+        print("Third Point MSE: ", log_info["third_point_mse"].item())
+        print("Fourth Point MSE: ", log_info["fourth_point_mse"].item())
+        print("Rotation Error (radians): ", log_info["rotation_error_avg"].item())
 
 
 

@@ -430,10 +430,14 @@ def train(args):
                 input_point_pos = inputs[batch_indices, sampled_index, :3] # B, 3
                 prediction = input_point_pos.unsqueeze(1) + displacement_mean # B, 4, 3
                 accumulated_val_loss += criterion(prediction, gripper_points.to(device))
-                first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
-                second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
-                third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
-                fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                # first_point_mse += criterion(prediction[:, 0, :], gripper_points.to(device)[:, 0, :]).item()
+                # second_point_mse += criterion(prediction[:, 1, :], gripper_points.to(device)[:, 1, :]).item()
+                # third_point_mse += criterion(prediction[:, 2, :], gripper_points.to(device)[:, 2, :]).item()
+                # fourth_point_mse += criterion(prediction[:, 3, :], gripper_points.to(device)[:, 3, :]).item()
+                first_point_mse += torch.norm(prediction[:, 0, :] - gripper_points.to(device)[:, 0, :], dim=1).pow(2).sum()
+                second_point_mse += torch.norm(prediction[:, 1, :] - gripper_points.to(device)[:, 1, :], dim=1).pow(2).sum()
+                third_point_mse += torch.norm(prediction[:, 2, :] - gripper_points.to(device)[:, 2, :], dim=1).pow(2).sum()
+                fourth_point_mse += torch.norm(prediction[:, 3, :] - gripper_points.to(device)[:, 3, :], dim=1).pow(2).sum()
             
             else:
                 # sum the displacement of the predicted gripper point cloud according to the weights
@@ -442,6 +446,11 @@ def train(args):
                 accumulated_val_loss += criterion(outputs, gripper_points.to(device))
         
     torch.distributed.all_reduce(accumulated_val_loss, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(first_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(second_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(third_point_mse, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(fourth_point_mse, op=torch.distributed.ReduceOp.SUM)
+
     accumulated_val_loss = accumulated_val_loss.item()
 
     if os.environ['LOCAL_RANK'] == '0':
@@ -450,14 +459,23 @@ def train(args):
         log_info = {
             "global_step": global_step,
             "accumulated_val_loss": accumulated_val_loss / len(val_dataloader.dataset),
-            "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
-            "fourth_point_mse": fourth_point_mse * 3 *args.batch_size / len(val_dataloader.dataset),
+            # "first_point_mse": first_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "second_point_mse": second_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "third_point_mse": third_point_mse * 3 * args.batch_size / len(val_dataloader.dataset),
+            # "fourth_point_mse": fourth_point_mse * 3 *args.batch_size / len(val_dataloader.dataset),
+            "first_point_mse": first_point_mse / len(val_dataloader.dataset),
+            "second_point_mse": second_point_mse / len(val_dataloader.dataset),
+            "third_point_mse": third_point_mse / len(val_dataloader.dataset),
+            "fourth_point_mse": fourth_point_mse / len(val_dataloader.dataset),
+
         
         }
 
-        print(log_info)
+        print("First Point MSE: ", log_info["first_point_mse"].item())
+        print("Second Point MSE: ", log_info["second_point_mse"].item())
+        print("Third Point MSE: ", log_info["third_point_mse"].item())
+        print("Fourth Point MSE: ", log_info["fourth_point_mse"].item())
+        
 
 
 
